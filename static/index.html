@@ -3,127 +3,410 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SecureVault POS — Облачная система управления</title>
+<title>SecureVault POS — Защищённая облачная система</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
-  :root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #f1f5f9; --muted: #94a3b8; --accent: #3b82f6; --green: #10b981; --red: #ef4444; }
-  * { box-sizing: border-box; font-family: 'Segoe UI', system-ui, sans-serif; }
-  body { margin: 0; background: var(--bg); color: var(--text); }
-  .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
-  input, select { background: #0f172a; border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; outline: none; }
-  input:focus { border-color: var(--accent); }
-  button { background: var(--accent); color: white; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; }
-  button:hover { opacity: 0.9; }
-  button.sec { background: #334155; }
-  button.danger { background: var(--red); }
-  button.success { background: var(--green); }
-  .tabs { display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-wrap: wrap; }
-  .tab { background: transparent; border: 1px solid var(--border); color: var(--muted); }
-  .tab.active { background: var(--accent); color: white; border-color: var(--accent); }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th, td { padding: 10px; text-align: left; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-weight: 600; }
-  .badge { padding: 3px 8px; border-radius: 12px; font-size: 12px; background: #334155; }
-  .log-box { background: #090d16; font-family: Consolas, monospace; font-size: 13px; padding: 12px; height: 360px; overflow: auto; border-radius: 6px; border: 1px solid var(--border); white-space: pre; color: #cbd5e1; }
-  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  :root {
+    --bg: #070b14;
+    --panel: #0f172a;
+    --card: #131c31;
+    --card-hover: #18233d;
+    --border: #1e293b;
+    --border-light: #334155;
+    --text: #f8fafc;
+    --muted: #94a3b8;
+    --accent: #3b82f6;
+    --accent-hover: #2563eb;
+    --green: #10b981;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --purple: #8b5cf6;
+  }
+  * { box-sizing: border-box; font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; }
+  body { margin: 0; background: radial-gradient(circle at top right, #111b33, var(--bg) 55%); color: var(--text); min-height: 100vh; }
+  
+  /* Кнопки и поля */
+  input, select {
+    background: #090e1a; border: 1px solid var(--border-light); color: var(--text);
+    padding: 10px 14px; border-radius: 8px; outline: none; font-size: 14px; transition: 0.2s;
+  }
+  input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,0.18); }
+  button {
+    background: linear-gradient(135deg, var(--accent), #2563eb); color: white; border: none;
+    padding: 10px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 14px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px; transition: 0.18s;
+  }
+  button:hover { transform: translateY(-1px); filter: brightness(1.08); }
+  button:active { transform: translateY(0); }
+  button.sec { background: #1e293b; border: 1px solid var(--border-light); color: #e2e8f0; }
+  button.sec:hover { background: #273549; }
+  button.success { background: linear-gradient(135deg, #10b981, #059669); }
+  button.danger { background: linear-gradient(135deg, #ef4444, #dc2626); }
+  button.google { background: #ffffff; color: #0f172a; border: 1px solid #cbd5e1; }
+  button.google:hover { background: #f1f5f9; }
+  button.sm { padding: 6px 11px; font-size: 12.5px; border-radius: 6px; }
+
   .hidden { display: none !important; }
+
+  /* Экран авторизации */
+  .auth-wrapper { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .auth-card {
+    width: 100%; max-width: 440px; background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(16px);
+    border: 1px solid var(--border-light); border-radius: 16px; padding: 32px;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+  }
+  .brand-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .brand-logo {
+    width: 42px; height: 42px; border-radius: 10px; background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: bold;
+  }
+  .auth-tabs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; background: #090e1a; padding: 5px; border-radius: 10px; margin: 20px 0; border: 1px solid var(--border); }
+  .auth-tab { background: transparent; color: var(--muted); padding: 8px; font-size: 13px; border-radius: 7px; }
+  .auth-tab.active { background: var(--card); color: white; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
+  .form-stack { display: flex; flex-direction: column; gap: 12px; }
+  .divider { display: flex; align-items: center; text-align: center; color: var(--muted); font-size: 12px; margin: 6px 0; }
+  .divider::before, .divider::after { content: ''; flex: 1; border-bottom: 1px solid var(--border-light); }
+  .divider:not(:empty)::before { margin-right: 10px; }
+  .divider:not(:empty)::after { margin-left: 10px; }
+
+  /* Основной макет приложения (Sidebar + Content) */
+  .layout { display: flex; min-height: 100vh; }
+  .sidebar {
+    width: 265px; background: var(--panel); border-right: 1px solid var(--border);
+    padding: 22px 16px; display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .nav-item {
+    width: 100%; justify-content: flex-start; background: transparent; color: var(--muted);
+    padding: 11px 14px; border-radius: 9px; margin-bottom: 6px; font-weight: 500;
+  }
+  .nav-item:hover { background: rgba(255,255,255,0.04); color: var(--text); transform: none; }
+  .nav-item.active { background: rgba(59,130,246,0.16); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
+  .main { flex: 1; padding: 26px 32px; max-width: 1400px; overflow-x: auto; }
+
+  .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 22px; margin-bottom: 20px; }
+  .grid-2 { display: grid; grid-template-columns: 1.5fr 1fr; gap: 20px; }
+  @media (max-width: 980px) { .layout { flex-direction: column; } .sidebar { width: 100%; } .grid-2 { grid-template-columns: 1fr; } }
+
+  .badge { padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; }
+  .badge-green { background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.3); }
+  .badge-blue { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
+  .badge-amber { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
+  .badge-red { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; padding: 12px 10px; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border-light); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  td { padding: 12px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .log-box {
+    background: #060911; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 12.5px;
+    padding: 16px; height: 420px; overflow: auto; border-radius: 10px; border: 1px solid var(--border-light);
+    white-space: pre; color: #cbd5e1; line-height: 1.55;
+  }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+  /* Модальное окно */
+  .modal-bg {
+    position: fixed; inset: 0; background: rgba(3,7,18,0.8); backdrop-filter: blur(6px);
+    display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px;
+  }
+  .modal { background: var(--panel); border: 1px solid var(--border-light); border-radius: 16px; padding: 28px; width: 100%; max-width: 420px; }
+  #qr-container { background: white; padding: 14px; border-radius: 12px; display: inline-block; margin: 14px 0; }
 </style>
 </head>
 <body>
-<div class="container">
-  <div id="auth-view" class="card" style="max-width: 420px; margin: 60px auto;">
-    <h2 style="margin-top:0">🔐 SecureVault POS (Cloud)</h2>
-    <p style="color:var(--muted); font-size:13px">Облачная POS-система с СУБД PostgreSQL и контролем целостности</p>
-    <div style="display:flex; flex-direction:column; gap:10px;">
-      <input id="u-login" placeholder="Логин сотрудника">
-      <input id="u-pass" type="password" placeholder="Пароль (мин. 8 символов)">
-      <input id="u-invite" placeholder="Код приглашения (только при регистрации)">
-      <button onclick="doLogin()">Войти в систему</button>
-      <button class="sec" onclick="doRegister()">Зарегистрироваться</button>
-    </div>
-  </div>
 
-  <div id="app-view" class="hidden">
-    <div class="card row" style="justify-content:space-between;">
+<!-- ==================== ЭКРАН ВХОДА / РЕГИСТРАЦИИ ==================== -->
+<div id="auth-view" class="auth-wrapper">
+  <div class="auth-card">
+    <div class="brand-head">
+      <div class="brand-logo">🛡️</div>
       <div>
-        <strong id="user-badge">Пользователь</strong>
-        <span class="badge" style="margin-left:8px; color:#34d399">● PostgreSQL Cloud Connected</span>
+        <h2 style="margin:0; font-size:20px;">SecureVault POS</h2>
+        <div style="color:var(--muted); font-size:12.5px;">Защищённая облачная система управления</div>
       </div>
-      <button class="danger" onclick="doLogout()">Завершить сессию</button>
     </div>
 
-    <div class="tabs">
-      <button class="tab active" onclick="switchTab('orders', this)">🛒 Касса и Заказы</button>
-      <button class="tab" onclick="switchTab('menu', this)">🍕 Меню и Склад</button>
-      <button id="tab-btn-admin" class="tab hidden" onclick="switchTab('admin', this)">⚙️ Персонал и Бэкапы</button>
-      <button id="tab-btn-logs" class="tab hidden" onclick="switchTab('logs', this)">📋 Журнал Аудита</button>
+    <div class="auth-tabs">
+      <button class="auth-tab active" onclick="setAuthMode('login', this)">Вход</button>
+      <button class="auth-tab" onclick="setAuthMode('register', this)">Регистрация</button>
+      <button class="auth-tab" onclick="setAuthMode('reset', this)">Сброс пароля</button>
     </div>
 
-    <div id="tab-orders" class="card">
-      <div class="row">
-        <input id="ord-table" value="Стол №1" style="width:120px">
-        <select id="ord-type"><option>В заведении</option><option>На вынос</option></select>
-        <select id="ord-pay"><option>Карта</option><option>Наличные</option></select>
-        <select id="ord-dish"></select>
-        <input id="ord-qty" type="number" value="1" min="1" style="width:70px">
-        <button class="success" onclick="createQuickOrder()">+ Оформить заказ</button>
-        <button class="sec" onclick="loadOrders()">Обновить</button>
-      </div>
-      <table>
-        <thead><tr><th>№</th><th>Стол</th><th>Тип</th><th>Состав</th><th>Сумма</th><th>Оплата</th><th>Статус</th><th>Кассир</th><th>Время</th><th>Действие</th></tr></thead>
-        <tbody id="orders-body"></tbody>
-      </table>
+    <!-- Вкладка 1: Вход -->
+    <div id="form-login" class="form-stack">
+      <input id="l-user" placeholder="Логин сотрудника" autocomplete="username">
+      <input id="l-pass" type="password" placeholder="Пароль" autocomplete="current-password" onkeydown="if(event.key==='Enter') doLogin()">
+      <button onclick="doLogin()">🔐 Войти в систему</button>
+      <div class="divider">или</div>
+      <button class="google" onclick="startGoogleOAuth('login')">
+        <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        Войти через Google
+      </button>
     </div>
 
-    <div id="tab-menu" class="card hidden">
-      <div id="menu-controls" class="row hidden">
-        <input id="m-name" placeholder="Название блюда">
-        <select id="m-cat"><option>Первые блюда</option><option>Вторые блюда</option><option>Гарниры</option><option>Салаты</option><option>Десерты</option><option>Напитки</option></select>
-        <input id="m-price" type="number" placeholder="Цена (₸)" style="width:110px">
-        <input id="m-stock" type="number" placeholder="Остаток" value="30" style="width:90px">
-        <button class="success" onclick="addMenuItem()">+ Добавить</button>
-      </div>
-      <table>
-        <thead><tr><th>ID</th><th>Наименование</th><th>Категория</th><th>Состав</th><th>Цена</th><th>Скидка</th><th>Остаток</th><th>Действия</th></tr></thead>
-        <tbody id="menu-body"></tbody>
-      </table>
+    <!-- Вкладка 2: Регистрация -->
+    <div id="form-register" class="form-stack hidden">
+      <input id="r-user" placeholder="Новый логин (латиница, 3–32 символа)">
+      <input id="r-pass" type="password" placeholder="Пароль (минимум 8 символов)">
+      <input id="r-invite" placeholder="Код приглашения от администратора">
+      <button class="success" onclick="doRegister()">✨ Создать учётную запись</button>
+      <div class="divider">или быстрая регистрация</div>
+      <button class="google" onclick="startGoogleOAuth('register')">
+        <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        Регистрация через Google (+ инвайт)
+      </button>
     </div>
 
-    <div id="tab-admin" class="card hidden">
-      <div class="row">
-        <button onclick="makeInvite()">🎟️ Создать код приглашения</button>
-        <button class="success" onclick="downloadFile('/api/admin/backup/excel', 'SecureVault_Report.xlsx')">📊 Отчёт в Excel (.xlsx)</button>
-        <button class="success" onclick="downloadFile('/api/admin/backup/json', 'SecureVault_SignedBackup.json')">💾 Подписанный Бэкап БД (.json + HMAC)</button>
-        <label style="background:#334155; padding:8px 14px; border-radius:6px; cursor:pointer; font-weight:600;">
-          ♻️ Восстановить из Бэкапа (.json)
-          <input type="file" accept=".json" style="display:none" onchange="restoreBackup(this)">
-        </label>
-      </div>
-      <table>
-        <thead><tr><th>Логин</th><th>Роль</th><th>Telegram 2FA</th><th>Google</th><th>Управление</th></tr></thead>
-        <tbody id="users-body"></tbody>
-      </table>
-    </div>
-
-    <div id="tab-logs" class="card hidden">
-      <div class="row">
-        <button class="sec" onclick="resetLogs()">🔄 Сброс</button>
-        <span>С:</span><input id="log-s" placeholder="08:00:00 или 2026-11-23" style="width:170px">
-        <span>По:</span><input id="log-e" placeholder="18:00:00" style="width:170px">
-        <button onclick="loadLogs()">🔍 Применить</button>
-        <button class="sec" onclick="presetTime('02:00:00','05:00:00')">Ночь</button>
-        <button class="sec" onclick="presetTime('08:00:00','12:00:00')">Утро</button>
-        <button class="sec" onclick="presetTime('14:00:00','17:00:00')">День</button>
-        <button class="sec" onclick="presetTime('18:00:00','23:00:00')">Вечер</button>
-      </div>
-      <div id="log-box" class="log-box"></div>
+    <!-- Вкладка 3: Сброс пароля -->
+    <div id="form-reset" class="form-stack hidden">
+      <input id="rst-user" placeholder="Логин сотрудника">
+      <input id="rst-newpass" type="password" placeholder="Новый пароль (минимум 8 символов)">
+      <input id="rst-code" placeholder="Резервный код (XXXX-XXXX-XXXX)">
+      <button onclick="doResetRecovery()">🔑 Сбросить по резервному коду</button>
+      <div class="divider">если привязан Telegram</div>
+      <button class="sec" onclick="doResetTgRequest()">📲 Получить 6-значный код в Telegram</button>
     </div>
   </div>
+</div>
+
+<!-- ==================== МОДАЛЬНОЕ ОКНО 2FA / QR ==================== -->
+<div id="modal-2fa" class="modal-bg hidden">
+  <div class="modal" style="text-align:center;">
+    <div style="font-size:34px; margin-bottom:8px;">📲</div>
+    <h3 style="margin:0 0 8px 0;" id="m2fa-title">Двухфакторная аутентификация</h3>
+    <p style="color:var(--muted); font-size:13.5px; margin-bottom:16px;" id="m2fa-desc">Введите 6-значный код подтверждения, отправленный в ваш Telegram.</p>
+    <input id="m2fa-code" maxlength="6" placeholder="000000" style="text-align:center; font-size:22px; letter-spacing:6px; width:100%; margin-bottom:14px;">
+    <div class="row" style="justify-content:center;">
+      <button class="success" style="flex:1" onclick="submit2FA()">Подтвердить</button>
+      <button class="sec" onclick="closeModal('modal-2fa')">Отмена</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== РАБОЧИЙ КАБИНЕТ ==================== -->
+<div id="app-view" class="layout hidden">
+  <aside class="sidebar">
+    <div>
+      <div class="brand-head" style="margin-bottom:24px; padding-left:6px;">
+        <div class="brand-logo" style="width:36px; height:36px; font-size:17px;">🛡️</div>
+        <div>
+          <div style="font-weight:700; font-size:16px;">SecureVault POS</div>
+          <div style="color:#34d399; font-size:11px;">● PostgreSQL Cloud</div>
+        </div>
+      </div>
+
+      <button class="nav-item active" onclick="nav('orders', this)">🛒 Касса и Заказы</button>
+      <button class="nav-item" onclick="nav('menu', this)">🍽️ Меню и Склад</button>
+      <button class="nav-item" onclick="nav('security', this)">🔐 Профиль и 2FA</button>
+      <button id="nav-admin" class="nav-item hidden" onclick="nav('admin', this)">⚙️ Персонал и Бэкапы</button>
+      <button id="nav-logs" class="nav-item hidden" onclick="nav('logs', this)">📋 Журнал Аудита</button>
+    </div>
+
+    <div style="border-top:1px solid var(--border); padding-top:16px;">
+      <div style="padding:0 6px 12px 6px;">
+        <div id="sb-user" style="font-weight:600; font-size:14px;">user</div>
+        <div style="margin-top:4px;"><span id="sb-role" class="badge badge-blue">ROLE</span></div>
+      </div>
+      <button class="danger" style="width:100%;" onclick="doLogout()">🚪 Выйти</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <!-- 1. КАССА И ЗАКАЗЫ -->
+    <section id="sec-orders">
+      <div class="topbar">
+        <div>
+          <h2 style="margin:0;">Касса и управление заказами</h2>
+          <div style="color:var(--muted); font-size:13px;">Оформление чеков с автоматическим списанием остатков со склада</div>
+        </div>
+        <button class="sec" onclick="loadOrders()">🔄 Обновить список</button>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3 style="margin-top:0; font-size:16px;">Активные и завершённые заказы</h3>
+          <table>
+            <thead><tr><th>№</th><th>Стол / Тип</th><th>Состав заказа</th><th>Сумма</th><th>Статус</th><th>Кассир</th><th>Действия</th></tr></thead>
+            <tbody id="orders-body"></tbody>
+          </table>
+        </div>
+
+        <div class="card" style="align-self:start;">
+          <h3 style="margin-top:0; font-size:16px;">Новый чек</h3>
+          <div class="form-stack">
+            <div class="row">
+              <input id="ord-table" value="Стол №1" style="flex:1">
+              <select id="ord-type" style="flex:1"><option>В заведении</option><option>На вынос</option></select>
+            </div>
+            <select id="ord-pay"><option>Карта</option><option>Наличные</option></select>
+            <div class="row">
+              <select id="ord-dish" style="flex:2"></select>
+              <input id="ord-qty" type="number" value="1" min="1" style="width:75px">
+              <button class="sec" onclick="addToCart()">+ В чек</button>
+            </div>
+            <div id="cart-box" style="background:#090e1a; border:1px solid var(--border); border-radius:8px; padding:12px; min-height:90px; font-size:13.5px;">
+              <div style="color:var(--muted)">Чек пуст. Добавьте позиции из меню...</div>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:16px; font-weight:700; padding:4px 0;">
+              <span>Итого к оплате:</span>
+              <span id="cart-total" style="color:#34d399;">0 ₸</span>
+            </div>
+            <button class="success" onclick="submitOrder()">💳 Оформить и провести заказ</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. МЕНЮ И СКЛАД -->
+    <section id="sec-menu" class="hidden">
+      <div class="topbar">
+        <div>
+          <h2 style="margin:0;">Меню и складской учёт</h2>
+          <div style="color:var(--muted); font-size:13px;">Контроль цен, акционных скидок и остатков позиций</div>
+        </div>
+        <input id="menu-search" placeholder="🔍 Поиск по названию..." oninput="renderMenu()" style="width:260px;">
+      </div>
+
+      <div id="menu-add-card" class="card hidden">
+        <h3 style="margin-top:0; font-size:15px;">Добавить новую позицию в меню</h3>
+        <div class="row">
+          <input id="m-name" placeholder="Название блюда" style="flex:2">
+          <select id="m-cat" style="flex:1"><option>Первые блюда</option><option>Вторые блюда</option><option>Гарниры</option><option>Салаты</option><option>Десерты</option><option>Напитки</option></select>
+          <input id="m-ing" placeholder="Состав / ингредиенты" style="flex:2">
+          <input id="m-price" type="number" placeholder="Цена (₸)" style="width:110px">
+          <input id="m-stock" type="number" placeholder="Остаток" value="30" style="width:95px">
+          <button class="success" onclick="addMenuItem()">+ Добавить</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <table>
+          <thead><tr><th>ID</th><th>Блюдо</th><th>Категория</th><th>Состав</th><th>Цена</th><th>Скидка</th><th>Остаток</th><th>Управление</th></tr></thead>
+          <tbody id="menu-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 3. ПРОФИЛЬ И БЕЗОПАСНОСТЬ (2FA, QR, GOOGLE, ПАРОЛЬ) -->
+    <section id="sec-security" class="hidden">
+      <div class="topbar">
+        <div>
+          <h2 style="margin:0;">Безопасность учётной записи</h2>
+          <div style="color:var(--muted); font-size:13px;">Настройка двухфакторной аутентификации Telegram, Google OAuth и пароля</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3 style="margin-top:0;">📲 Двухфакторная аутентификация (Telegram 2FA)</h3>
+          <p style="color:var(--muted); font-size:13.5px;">При включённой защите каждый вход в систему и сброс пароля подтверждаются одноразовым 6-значным кодом в Telegram.</p>
+          <div id="tg-status-box" style="margin-bottom:16px;"></div>
+
+          <div class="row">
+            <button onclick="generateTgQR()">📷 Привязать Telegram (QR-код)</button>
+            <button id="btn-tg-unlink" class="danger hidden" onclick="unlinkTg()">Отвязать Telegram</button>
+          </div>
+
+          <div id="qr-area" class="hidden" style="margin-top:20px; padding:18px; background:#090e1a; border:1px solid var(--border-light); border-radius:12px; text-align:center;">
+            <div style="font-weight:600; margin-bottom:6px;">Отсканируйте QR-код камерой телефона</div>
+            <div style="color:var(--muted); font-size:12.5px;">Или откройте прямую ссылку и нажмите <b>Start</b> в Telegram:</div>
+            <div id="qr-container"></div>
+            <div><a id="tg-direct-link" href="#" target="_blank" style="color:#60a5fa; font-size:13px; word-break:break-all;"></a></div>
+            <button class="sec sm" style="margin-top:12px;" onclick="loadProfile()">🔄 Проверить статус привязки</button>
+          </div>
+        </div>
+
+        <div class="form-stack">
+          <div class="card" style="margin-bottom:0;">
+            <h3 style="margin-top:0;">🌐 Привязка аккаунта Google</h3>
+            <p style="color:var(--muted); font-size:13.5px;">Позволяет входить в систему в один клик через Google OAuth 2.0.</p>
+            <div id="google-status-box" style="margin-bottom:14px;"></div>
+            <div class="row">
+              <button class="google" onclick="startGoogleOAuth('link')">Привязать Google</button>
+              <button id="btn-gg-unlink" class="danger hidden" onclick="unlinkGoogle()">Отвязать</button>
+            </div>
+          </div>
+
+          <div class="card" style="margin-bottom:0;">
+            <h3 style="margin-top:0;">🔑 Смена пароля</h3>
+            <div class="form-stack">
+              <input id="cp-old" type="password" placeholder="Текущий пароль">
+              <input id="cp-new" type="password" placeholder="Новый пароль (мин. 8 символов)">
+              <button onclick="changePass()">Обновить пароль</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. АДМИН-ПАНЕЛЬ: ПЕРСОНАЛ И БЭКАПЫ -->
+    <section id="sec-admin" class="hidden">
+      <div class="topbar">
+        <div>
+          <h2 style="margin:0;">Администрирование и целостность БД</h2>
+          <div style="color:var(--muted); font-size:13px;">Управление доступом сотрудников, инвайт-кодами и криптографическими снимками</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row" style="justify-content:space-between;">
+          <div class="row">
+            <button onclick="makeInvite()">🎟️ Сгенерировать инвайт-код</button>
+            <button class="success" onclick="downloadFile('/api/admin/backup/excel', 'SecureVault_Report.xlsx')">📊 Отчёт Excel (.xlsx)</button>
+            <button class="sec" onclick="downloadFile('/api/admin/backup/json', 'SecureVault_SignedBackup.json')">💾 Подписанный Бэкап (.json + HMAC)</button>
+          </div>
+          <label style="background:#1e293b; border:1px solid var(--border-light); padding:10px 16px; border-radius:8px; cursor:pointer; font-weight:600; font-size:14px;">
+            ♻️ Восстановить БД из .json
+            <input type="file" accept=".json" style="display:none" onchange="restoreBackup(this)">
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0; font-size:16px;">Зарегистрированные сотрудники</h3>
+        <table>
+          <thead><tr><th>Логин</th><th>Роль</th><th>Telegram 2FA</th><th>Google OAuth</th><th>Управление правами</th></tr></thead>
+          <tbody id="users-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 5. ЖУРНАЛ АУДИТА -->
+    <section id="sec-logs" class="hidden">
+      <div class="topbar">
+        <div>
+          <h2 style="margin:0;">Журнал аудита безопасности</h2>
+          <div style="color:var(--muted); font-size:13px;">Мониторинг входов, операций кассы, изменений ролей и нарушений целостности</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row" style="margin-bottom:14px;">
+          <button class="sec sm" onclick="resetLogs()">🔄 Все записи</button>
+          <span style="color:var(--muted); font-size:13px;">С:</span>
+          <input id="log-s" placeholder="08:00:00 или 2026-11-23" style="width:175px">
+          <span style="color:var(--muted); font-size:13px;">По:</span>
+          <input id="log-e" placeholder="18:00:00" style="width:175px">
+          <button class="sm" onclick="loadLogs()">🔍 Фильтр</button>
+          <button class="sec sm" onclick="presetTime('02:00:00','05:00:00')">Ночь</button>
+          <button class="sec sm" onclick="presetTime('08:00:00','12:00:00')">Утро</button>
+          <button class="sec sm" onclick="presetTime('14:00:00','17:00:00')">День</button>
+          <button class="sec sm" onclick="presetTime('18:00:00','23:00:00')">Вечер</button>
+        </div>
+        <div id="log-box" class="log-box"></div>
+      </div>
+    </section>
+  </main>
 </div>
 
 <script>
 let TOKEN = localStorage.getItem('sv_token') || '';
 let USER = JSON.parse(localStorage.getItem('sv_user') || 'null');
+let MENU_CACHE = [];
+let CART = [];
+let PENDING_2FA = { id: '', mode: 'login', newPass: '' };
 
 async function api(method, path, body=null) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
@@ -132,34 +415,124 @@ async function api(method, path, body=null) {
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    if (res.status === 401) doLogout();
-    throw new Error(data.detail || 'Ошибка запроса');
+    if (res.status === 401 && TOKEN) doLogout();
+    throw new Error(data.detail || 'Ошибка выполнения запроса');
   }
   return data;
+}
+
+/* ---------- АВТОРИЗАЦИЯ И 2FA ---------- */
+function setAuthMode(mode, btn) {
+  ['login','register','reset'].forEach(m => document.getElementById('form-'+m).classList.add('hidden'));
+  document.getElementById('form-'+mode).classList.remove('hidden');
+  document.querySelectorAll('.auth-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
 }
 
 async function doLogin() {
   try {
     const res = await api('POST', '/api/auth/login', {
-      username: document.getElementById('u-login').value,
-      password: document.getElementById('u-pass').value
+      username: document.getElementById('l-user').value,
+      password: document.getElementById('l-pass').value
     });
-    TOKEN = res.token; USER = res;
-    localStorage.setItem('sv_token', TOKEN);
-    localStorage.setItem('sv_user', JSON.stringify(USER));
-    initApp();
+    if (res.status === '2fa_required') {
+      PENDING_2FA = { id: res.challenge_id, mode: 'login' };
+      document.getElementById('m2fa-title').textContent = 'Подтверждение входа (Telegram 2FA)';
+      document.getElementById('m2fa-desc').textContent = 'Введите 6-значный код, отправленный в ваш Telegram.';
+      document.getElementById('m2fa-code').value = '';
+      document.getElementById('modal-2fa').classList.remove('hidden');
+      return;
+    }
+    saveSession(res);
+  } catch (e) { alert(e.message); }
+}
+
+async function submit2FA() {
+  const code = document.getElementById('m2fa-code').value.trim();
+  try {
+    if (PENDING_2FA.mode === 'login') {
+      const res = await api('POST', '/api/auth/2fa', { challenge_id: PENDING_2FA.id, code });
+      closeModal('modal-2fa');
+      saveSession(res);
+    } else {
+      await api('POST', '/api/auth/reset/tg/confirm', {
+        challenge_id: PENDING_2FA.id, code, new_password: PENDING_2FA.newPass
+      });
+      closeModal('modal-2fa');
+      alert('Пароль успешно изменён! Теперь войдите с новым паролем.');
+    }
   } catch (e) { alert(e.message); }
 }
 
 async function doRegister() {
   try {
     const res = await api('POST', '/api/auth/register', {
-      username: document.getElementById('u-login').value,
-      password: document.getElementById('u-pass').value,
-      invite_code: document.getElementById('u-invite').value
+      username: document.getElementById('r-user').value,
+      password: document.getElementById('r-pass').value,
+      invite_code: document.getElementById('r-invite').value
     });
-    alert(`Сотрудник зарегистрирован (Роль: ${res.role})!\nЗапишите резервный код: ${res.recovery_code}\nТеперь нажмите «Войти в систему».`);
+    alert(`Учётная запись создана (Роль: ${res.role.toUpperCase()})!\n\nВАШ РЕЗЕРВНЫЙ КОД ВОССТАНОВЛЕНИЯ:\n${res.recovery_code}\n\nОбязательно сохраните его. Теперь перейдите на вкладку «Вход».`);
   } catch (e) { alert(e.message); }
+}
+
+async function doResetRecovery() {
+  try {
+    const res = await api('POST', '/api/auth/reset/recovery', {
+      username: document.getElementById('rst-user').value,
+      recovery_code: document.getElementById('rst-code').value,
+      new_password: document.getElementById('rst-newpass').value
+    });
+    alert(`Пароль успешно сброшен!\nНовый резервный код: ${res.new_recovery_code}`);
+  } catch (e) { alert(e.message); }
+}
+
+async function doResetTgRequest() {
+  const username = document.getElementById('rst-user').value.trim();
+  const newPass = document.getElementById('rst-newpass').value;
+  if (!username || newPass.length < 8) return alert('Сначала укажите логин и новый пароль (минимум 8 символов).');
+  try {
+    const res = await api('POST', '/api/auth/reset/tg/request', { username });
+    PENDING_2FA = { id: res.challenge_id, mode: 'reset', newPass };
+    document.getElementById('m2fa-title').textContent = 'Сброс пароля через Telegram';
+    document.getElementById('m2fa-desc').textContent = 'Введите 6-значный код из Telegram для подтверждения смены пароля.';
+    document.getElementById('m2fa-code').value = '';
+    document.getElementById('modal-2fa').classList.remove('hidden');
+  } catch (e) { alert(e.message); }
+}
+
+/* ---------- GOOGLE OAUTH 2.0 ---------- */
+async function startGoogleOAuth(mode) {
+  try {
+    const inv = mode === 'register' ? document.getElementById('r-invite').value : '';
+    const q = new URLSearchParams({ mode, invite_code: inv, token: TOKEN });
+    const res = await api('GET', '/api/oauth/google/start?' + q.toString());
+    window.open(res.auth_url, 'google_oauth', 'width=520,height=640');
+  } catch (e) { alert(e.message); }
+}
+
+window.addEventListener('message', (ev) => {
+  const d = ev.data || {};
+  if (d.type !== 'google_oauth') return;
+  if (!d.ok) return alert(d.error || 'Ошибка Google OAuth');
+  if (d.mode === 'link') {
+    alert(`Аккаунт Google (${d.email}) успешно привязан!`);
+    loadProfile();
+  } else if (d.mode === '2fa') {
+    PENDING_2FA = { id: d.challenge_id, mode: 'login' };
+    document.getElementById('m2fa-title').textContent = 'Подтверждение входа (Telegram 2FA)';
+    document.getElementById('m2fa-code').value = '';
+    document.getElementById('modal-2fa').classList.remove('hidden');
+  } else if (d.session) {
+    if (d.recovery_code) alert(`Регистрация через Google завершена!\nВаш резервный код: ${d.recovery_code}`);
+    saveSession(d.session);
+  }
+});
+
+function saveSession(sess) {
+  TOKEN = sess.token; USER = sess;
+  localStorage.setItem('sv_token', TOKEN);
+  localStorage.setItem('sv_user', JSON.stringify(USER));
+  initApp();
 }
 
 function doLogout() {
@@ -170,40 +543,155 @@ function doLogout() {
   document.getElementById('app-view').classList.add('hidden');
 }
 
+function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+/* ---------- КАБИНЕТ И НАВИГАЦИЯ ---------- */
 function initApp() {
   if (!TOKEN || !USER) return;
   document.getElementById('auth-view').classList.add('hidden');
   document.getElementById('app-view').classList.remove('hidden');
-  document.getElementById('user-badge').textContent = `Пользователь: ${USER.username} | Роль: ${USER.role.toUpperCase()}`;
+  document.getElementById('sb-user').textContent = USER.username;
+  document.getElementById('sb-role').textContent = USER.role.toUpperCase();
 
   const isMgr = ['admin', 'manager'].includes(USER.role);
   const isAdm = USER.role === 'admin';
-  document.getElementById('menu-controls').classList.toggle('hidden', !isMgr);
-  document.getElementById('tab-btn-admin').classList.toggle('hidden', !isAdm);
-  document.getElementById('tab-btn-logs').classList.toggle('hidden', !isAdm);
+  document.getElementById('menu-add-card').classList.toggle('hidden', !isMgr);
+  document.getElementById('nav-admin').classList.toggle('hidden', !isAdm);
+  document.getElementById('nav-logs').classList.toggle('hidden', !isAdm);
 
-  loadMenu(); loadOrders();
+  loadMenu(); loadOrders(); loadProfile();
   if (isAdm) { loadUsers(); loadLogs(); }
 }
 
-function switchTab(name, btn) {
-  ['orders','menu','admin','logs'].forEach(t => document.getElementById('tab-'+t).classList.add('hidden'));
-  document.getElementById('tab-'+name).classList.remove('hidden');
-  document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+function nav(sec, btn) {
+  ['orders','menu','security','admin','logs'].forEach(s => document.getElementById('sec-'+s).classList.add('hidden'));
+  document.getElementById('sec-'+sec).classList.remove('hidden');
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
 }
 
+/* ---------- ПРОФИЛЬ И QR-КОД TELEGRAM ---------- */
+async function loadProfile() {
+  const me = await api('GET', '/api/me');
+  document.getElementById('tg-status-box').innerHTML = me.tg_linked
+    ? `<span class="badge badge-green">● Telegram 2FA активен и защищает вход</span>`
+    : `<span class="badge badge-amber">● Telegram 2FA не привязан</span>`;
+  document.getElementById('btn-tg-unlink').classList.toggle('hidden', !me.tg_linked);
+
+  document.getElementById('google-status-box').innerHTML = me.google_email
+    ? `<span class="badge badge-blue">● Привязан: ${me.google_email}</span>`
+    : `<span class="badge" style="background:#1e293b;color:var(--muted)">Не привязан</span>`;
+  document.getElementById('btn-gg-unlink').classList.toggle('hidden', !me.google_email);
+}
+
+async function generateTgQR() {
+  try {
+    const res = await api('POST', '/api/me/telegram/link');
+    document.getElementById('qr-area').classList.remove('hidden');
+    const box = document.getElementById('qr-container');
+    box.innerHTML = '';
+    new QRCode(box, { text: res.url, width: 190, height: 190 });
+    const link = document.getElementById('tg-direct-link');
+    link.href = res.url; link.textContent = res.url;
+  } catch (e) { alert(e.message); }
+}
+
+async function unlinkTg() {
+  if (confirm('Отключить двухфакторную аутентификацию Telegram?')) {
+    await api('DELETE', '/api/me/telegram/link');
+    document.getElementById('qr-area').classList.add('hidden');
+    loadProfile();
+  }
+}
+
+async function unlinkGoogle() {
+  if (confirm('Отвязать Google аккаунт?')) { await api('DELETE', '/api/me/google/link'); loadProfile(); }
+}
+
+async function changePass() {
+  try {
+    await api('POST', '/api/me/password', {
+      old_password: document.getElementById('cp-old').value,
+      new_password: document.getElementById('cp-new').value
+    });
+    document.getElementById('cp-old').value = '';
+    document.getElementById('cp-new').value = '';
+    alert('Пароль успешно обновлён!');
+  } catch (e) { alert(e.message); }
+}
+
+/* ---------- МЕНЮ И КОРЗИНА ЗАКАЗА ---------- */
 async function loadMenu() {
-  const items = await api('GET', '/api/menu');
+  MENU_CACHE = await api('GET', '/api/menu');
   const sel = document.getElementById('ord-dish');
-  sel.innerHTML = items.map(m => `<option value="${m.id}">${m.name} (${m.price} ₸ | ост. ${m.stock})</option>`).join('');
+  sel.innerHTML = MENU_CACHE.map(m => {
+    const finalP = Math.round(m.price * (1 - m.discount / 100));
+    return `<option value="${m.id}">${m.name} — ${finalP} ₸ (ост. ${m.stock})</option>`;
+  }).join('');
+  renderMenu();
+}
+
+function renderMenu() {
+  const q = (document.getElementById('menu-search').value || '').toLowerCase();
   const isMgr = ['admin', 'manager'].includes(USER.role);
-  document.getElementById('menu-body').innerHTML = items.map(m => `
+  const filtered = MENU_CACHE.filter(m => m.name.toLowerCase().includes(q) || m.category.toLowerCase().includes(q));
+  document.getElementById('menu-body').innerHTML = filtered.map(m => `
     <tr>
-      <td>${m.id}</td><td><strong>${m.name}</strong></td><td>${m.category}</td><td style="color:var(--muted)">${m.ingredients}</td>
-      <td>${m.price} ₸</td><td>${m.discount}%</td><td>${m.stock} шт</td>
-      <td>${isMgr ? `<button class="sec" onclick="updStock(${m.id})">Склад</button> <button class="danger" onclick="delMenu(${m.id})">✕</button>` : '-'}</td>
+      <td style="color:var(--muted)">#${m.id}</td>
+      <td><strong>${m.name}</strong></td>
+      <td><span class="badge badge-blue">${m.category}</span></td>
+      <td style="color:var(--muted); max-width:260px;">${m.ingredients}</td>
+      <td><strong>${m.price} ₸</strong></td>
+      <td>${m.discount > 0 ? `<span class="badge badge-green">-${m.discount}%</span>` : '0%'}</td>
+      <td><span class="badge ${m.stock < 5 ? 'badge-red' : 'badge-green'}">${m.stock} шт</span></td>
+      <td>${isMgr ? `
+        <button class="sec sm" onclick="updStock(${m.id})">Склад</button>
+        <button class="sec sm" onclick="updDisc(${m.id})">Скидка</button>
+        <button class="danger sm" onclick="delMenu(${m.id})">✕</button>` : '-'}
+      </td>
     </tr>`).join('');
+}
+
+function addToCart() {
+  const id = parseInt(document.getElementById('ord-dish').value);
+  const qty = parseInt(document.getElementById('ord-qty').value) || 1;
+  const dish = MENU_CACHE.find(m => m.id === id);
+  if (!dish) return;
+  const ex = CART.find(c => c.id === id);
+  if (ex) ex.qty += qty; else CART.push({ id, name: dish.name, price: Math.round(dish.price * (1 - dish.discount/100)), qty });
+  renderCart();
+}
+
+function renderCart() {
+  const box = document.getElementById('cart-box');
+  if (!CART.length) {
+    box.innerHTML = '<div style="color:var(--muted)">Чек пуст. Добавьте позиции из меню...</div>';
+    document.getElementById('cart-total').textContent = '0 ₸';
+    return;
+  }
+  let sum = 0;
+  box.innerHTML = CART.map((c, idx) => {
+    sum += c.price * c.qty;
+    return `<div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+      <span>${c.name} × <b>${c.qty}</b></span>
+      <span>${c.price * c.qty} ₸ <a href="#" onclick="CART.splice(${idx},1);renderCart();return false;" style="color:#f87171;text-decoration:none;margin-left:6px;">✕</a></span>
+    </div>`;
+  }).join('');
+  document.getElementById('cart-total').textContent = `${sum} ₸`;
+}
+
+async function submitOrder() {
+  if (!CART.length) return alert('Добавьте хотя бы одно блюдо в чек.');
+  try {
+    await api('POST', '/api/orders', {
+      table: document.getElementById('ord-table').value,
+      type: document.getElementById('ord-type').value,
+      payment: document.getElementById('ord-pay').value,
+      items: CART.map(c => ({ id: c.id, qty: c.qty }))
+    });
+    CART = []; renderCart();
+    loadOrders(); loadMenu();
+  } catch (e) { alert(e.message); }
 }
 
 async function addMenuItem() {
@@ -211,62 +699,56 @@ async function addMenuItem() {
     await api('POST', '/api/menu', {
       name: document.getElementById('m-name').value,
       category: document.getElementById('m-cat').value,
+      ingredients: document.getElementById('m-ing').value || 'Стандартный рецепт',
       price: parseFloat(document.getElementById('m-price').value),
       stock: parseInt(document.getElementById('m-stock').value)
     });
+    document.getElementById('m-name').value = '';
     loadMenu();
   } catch (e) { alert(e.message); }
 }
 
-async function updStock(id) {
-  const val = prompt('Новый остаток (шт):', '50');
-  if (val !== null) { await api('PATCH', `/api/menu/${id}/stock`, { stock: parseInt(val) }); loadMenu(); }
-}
-async function delMenu(id) {
-  if (confirm('Удалить блюдо?')) { await api('DELETE', `/api/menu/${id}`); loadMenu(); }
-}
+async function updStock(id) { const v = prompt('Новый остаток (шт):', '50'); if (v !== null) { await api('PATCH', `/api/menu/${id}/stock`, { stock: parseInt(v) }); loadMenu(); } }
+async function updDisc(id) { const v = prompt('Новая скидка (%):', '10'); if (v !== null) { await api('PATCH', `/api/menu/${id}/discount`, { discount: parseInt(v) }); loadMenu(); } }
+async function delMenu(id) { if (confirm('Удалить позицию?')) { await api('DELETE', `/api/menu/${id}`); loadMenu(); } }
 
+/* ---------- ЗАКАЗЫ, ПЕРСОНАЛ И ЛОГИ ---------- */
 async function loadOrders() {
   const list = await api('GET', '/api/orders');
   const isMgr = ['admin', 'manager'].includes(USER.role);
+  const stBadge = s => s === 'Выполнен' ? 'badge-green' : s === 'Отменен' ? 'badge-red' : 'badge-amber';
   document.getElementById('orders-body').innerHTML = list.map(o => `
     <tr>
-      <td>#${o.id}</td><td>${o.table}</td><td>${o.type}</td><td>${o.items}</td>
-      <td><strong>${o.total} ₸</strong></td><td>${o.payment}</td><td><span class="badge">${o.status}</span></td>
-      <td>${o.waiter}</td><td>${o.created_at}</td>
+      <td><strong>#${o.id}</strong></td>
+      <td>${o.table}<div style="font-size:11px;color:var(--muted)">${o.type} • ${o.payment}</div></td>
+      <td style="max-width:250px;">${o.items}</td>
+      <td><strong>${o.total} ₸</strong></td>
+      <td><span class="badge ${stBadge(o.status)}">${o.status}</span></td>
+      <td>${o.waiter}<div style="font-size:11px;color:var(--muted)">${o.created_at}</div></td>
       <td>
-        <button class="sec" onclick="setOrderSt(${o.id}, 'Выполнен')">✓</button>
-        <button class="sec" onclick="setOrderSt(${o.id}, 'Отменен')">Отмена</button>
-        ${isMgr ? `<button class="danger" onclick="delOrder(${o.id})">✕</button>` : ''}
+        <button class="success sm" onclick="setOrderSt(${o.id}, 'Выполнен')" title="Выполнен">✓</button>
+        <button class="sec sm" onclick="setOrderSt(${o.id}, 'Отменен')" title="Отменить">Отмена</button>
+        ${isMgr ? `<button class="danger sm" onclick="delOrder(${o.id})">✕</button>` : ''}
       </td>
     </tr>`).join('');
 }
 
-async function createQuickOrder() {
-  try {
-    await api('POST', '/api/orders', {
-      table: document.getElementById('ord-table').value,
-      type: document.getElementById('ord-type').value,
-      payment: document.getElementById('ord-pay').value,
-      items: [{ id: parseInt(document.getElementById('ord-dish').value), qty: parseInt(document.getElementById('ord-qty').value) }]
-    });
-    loadOrders(); loadMenu();
-  } catch (e) { alert(e.message); }
-}
-
-async function setOrderSt(id, status) {
-  try { await api('PATCH', `/api/orders/${id}/status`, { status }); loadOrders(); loadMenu(); } catch(e){ alert(e.message); }
-}
-async function delOrder(id) {
-  if (confirm('Удалить заказ?')) { await api('DELETE', `/api/orders/${id}`); loadOrders(); loadMenu(); }
-}
+async function setOrderSt(id, status) { try { await api('PATCH', `/api/orders/${id}/status`, { status }); loadOrders(); loadMenu(); } catch(e){ alert(e.message); } }
+async function delOrder(id) { if (confirm('Удалить заказ?')) { await api('DELETE', `/api/orders/${id}`); loadOrders(); loadMenu(); } }
 
 async function loadUsers() {
   const users = await api('GET', '/api/admin/users');
   document.getElementById('users-body').innerHTML = users.map(u => `
     <tr>
-      <td><strong>${u.login}</strong></td><td>${u.role}</td><td>${u.tg ? 'Привязан' : 'Нет'}</td><td>${u.google_email || '-'}</td>
-      <td>${u.role !== 'admin' ? `<button class="sec" onclick="setRole('${u.login}','manager')">Менеджер</button> <button class="sec" onclick="setRole('${u.login}','user')">Кассир</button> <button class="danger" onclick="delUser('${u.login}')">Удалить</button>` : 'Главный админ'}</td>
+      <td><strong>${u.login}</strong></td>
+      <td><span class="badge badge-blue">${u.role.toUpperCase()}</span></td>
+      <td>${u.tg ? '<span class="badge badge-green">Включена</span>' : '<span style="color:var(--muted)">Нет</span>'}</td>
+      <td>${u.google_email || '<span style="color:var(--muted)">—</span>'}</td>
+      <td>${u.role !== 'admin' ? `
+        <button class="sec sm" onclick="setRole('${u.login}','manager')">Менеджер</button>
+        <button class="sec sm" onclick="setRole('${u.login}','user')">Кассир</button>
+        <button class="danger sm" onclick="delUser('${u.login}')">Удалить</button>` : '<span style="color:var(--muted)">Администратор</span>'}
+      </td>
     </tr>`).join('');
 }
 
@@ -278,7 +760,7 @@ async function loadLogs() {
   const s = document.getElementById('log-s').value;
   const e = document.getElementById('log-e').value;
   const r = await api('GET', `/api/admin/logs?start_time=${encodeURIComponent(s)}&end_time=${encodeURIComponent(e)}`);
-  document.getElementById('log-box').textContent = r.logs.join('\n');
+  document.getElementById('log-box').textContent = r.logs.join('\n') || 'Журнал пуст или записи по фильтру не найдены.';
 }
 function presetTime(s, e) { document.getElementById('log-s').value = s; document.getElementById('log-e').value = e; loadLogs(); }
 function resetLogs() { document.getElementById('log-s').value = ''; document.getElementById('log-e').value = ''; loadLogs(); }
@@ -296,7 +778,7 @@ async function restoreBackup(input) {
   try {
     const json = JSON.parse(await file.text());
     await api('POST', '/api/admin/restore/json', json);
-    alert('База данных успешно восстановлена! Контрольная сумма HMAC-SHA256 подтверждена.');
+    alert('✅ База данных успешно восстановлена! Контрольная сумма HMAC-SHA256 подтверждена.');
     loadMenu(); loadOrders(); loadUsers(); loadLogs();
   } catch (e) { alert(e.message); }
   input.value = '';
