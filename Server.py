@@ -23,7 +23,7 @@ from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -47,14 +47,20 @@ load_dotenv(ENV_FILE, override=True)
 APP_NAME = "SecureVault POS System"
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
 MASTER_KEY = os.environ.get("SERVER_MASTER_KEY", "").strip() or Fernet.generate_key().decode()
 
 MAX_ATTEMPTS = 5
 LOCK_SECONDS = 60
+CODE_TTL = 300
+CODE_TRIES = 3
+LINK_TTL = 600
 SESSION_TTL = 8 * 3600
 INVITE_TTL = 24 * 3600
 MIN_PASSWORD = 8
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,32}$")
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 
 def b64e(data: bytes) -> str:
@@ -134,12 +140,19 @@ class PostgresDB:
 db = PostgresDB(DATABASE_URL)
 
 sessions: dict[str, dict] = {}
+challenges: dict[str, dict] = {}
+link_tokens: dict[str, dict] = {}
+oauth_states: dict[str, dict] = {}
 invites: dict[str, float] = {}
+tg_offset = 0
+bot_username = ""
+
 
 def purge():
     now = time.time()
-    for k in [k for k, v in sessions.items() if v["expires"] < now]:
-        sessions.pop(k, None)
+    for store in (sessions, challenges, link_tokens, oauth_states):
+        for k in [k for k, v in store.items() if v["expires"] < now]:
+            store.pop(k, None)
     for k in [k for k, v in invites.items() if v < now]:
         invites.pop(k, None)
 
@@ -147,12 +160,104 @@ def drop_sessions(name: str):
     for t in [t for t, s in sessions.items() if s["name"] == name]:
         sessions.pop(t, None)
 
+def tg_call(method: str, params: dict | None = None):
+    if not TG_BOT_TOKEN:
+        raise RuntimeError("TG_BOT_TOKEN не настроен на сервере.")
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{TG_BOT_TOKEN}/{method}",
+        data=json.dumps(params or {}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.load(resp)["result"]
+
+def init_telegram_bot():
+    global bot_username
+    if not TG_BOT_TOKEN:
+        logger.warning("[TELEGRAM] TG_BOT_TOKEN не задан — 2FA через Telegram отключен.")
+        return
+    try:
+        me = tg_call("getMe")
+        bot_username = me["username"]
+        logger.info(f"[TELEGRAM] Бот @{bot_username} успешно подключен.")
+    except Exception as e:
+        logger.error(f"[TELEGRAM] Ошибка инициализации бота: {e}")
+
+def tg_poller():
+    global tg_offset
+    while True:
+        try:
+            if not TG_BOT_TOKEN:
+                time.sleep(5)
+                continue
+            updates = tg_call("getUpdates", {"offset": tg_offset, "timeout": 20, "allowed_updates": ["message"]})
+            for upd in updates:
+                tg_offset = upd["update_id"] + 1
+                msg = upd.get("message") or {}
+                text = (msg.get("text") or "").strip()
+                chat_id = (msg.get("chat") or {}).get("id")
+                if not chat_id or not text.startswith("/start"):
+                    continue
+                parts = text.split(maxsplit=1)
+                if len(parts) < 2:
+                    tg_call("sendMessage", {"chat_id": chat_id, "text": f"{APP_NAME}\nОткройте привязку в личном кабинете."})
+                    continue
+                purge()
+                entry = link_tokens.pop(parts[1].strip(), None)
+                if not entry or entry["expires"] < time.time():
+                    tg_call("sendMessage", {"chat_id": chat_id, "text": "Ссылка устарела. Сгенерируйте новый QR-код."})
+                    continue
+                db.execute("UPDATE users SET tg_enc = %s WHERE username = %s", (db.enc(str(chat_id)), entry["name"]))
+                logger.info(f"[2FA ПРИВЯЗКА] Пользователь '{entry['name']}' привязал Telegram (chat_id={chat_id})")
+                tg_call("sendMessage", {"chat_id": chat_id, "text": f"✅ Telegram успешно привязан к учётной записи «{entry['name']}»."})
+        except Exception:
+            time.sleep(3)
+
+def send_2fa_code(name: str, rec: dict, kind: str) -> str:
+    cid = db.chat_id(rec.get("tg_enc", ""))
+    if not cid:
+        raise HTTPException(400, "К этому аккаунту не привязан Telegram.")
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    cid_token = secrets.token_urlsafe(24)
+    challenges[cid_token] = {
+        "name": name, "kind": kind,
+        "hash": hash_secret(code),
+        "expires": time.time() + CODE_TTL, "tries": CODE_TRIES,
+    }
+    label = "входа в систему" if kind == "login" else "сброса пароля"
+    try:
+        tg_call("sendMessage", {"chat_id": cid, "text": f"🔐 {APP_NAME}\nКод подтверждения для {label}: {code}\nДействует 5 минут."})
+    except Exception:
+        challenges.pop(cid_token, None)
+        raise HTTPException(502, "Не удалось отправить код в Telegram. Проверьте TG_BOT_TOKEN.")
+    return cid_token
+
+def verify_2fa_code(cid_token: str, code: str, expected_kind: str) -> str:
+    purge()
+    ch = challenges.get(cid_token)
+    if not ch or ch["kind"] != expected_kind:
+        raise HTTPException(400, "Сессия подтверждения истекла. Запросите код заново.")
+    if not verify_secret(code.strip(), ch["hash"]):
+        ch["tries"] -= 1
+        if ch["tries"] <= 0:
+            challenges.pop(cid_token, None)
+            raise HTTPException(400, "Превышено число попыток ввода кода.")
+        raise HTTPException(400, f"Неверный код. Осталось попыток: {ch['tries']}.")
+    challenges.pop(cid_token, None)
+    return ch["name"]
+
 def start_session(name: str) -> dict:
     token = secrets.token_urlsafe(32)
     sessions[token] = {"name": name, "expires": time.time() + SESSION_TTL}
-    rec = db.execute("SELECT role, google_email FROM users WHERE username = %s", (name,), "one")
+    rec = db.execute("SELECT role, tg_enc, google_email FROM users WHERE username = %s", (name,), "one")
     logger.info(f"[АУДИТ] Создана веб-сессия для '{name}' (Роль: {rec['role']})")
-    return {"token": token, "username": name, "role": rec["role"], "google_email": rec.get("google_email") or ""}
+    return {
+        "token": token,
+        "username": name,
+        "role": rec["role"],
+        "tg_linked": bool(rec.get("tg_enc")),
+        "google_email": rec.get("google_email") or "",
+    }
 
 def current_user(authorization: str = Header(default="")):
     token = authorization.removeprefix("Bearer ").strip()
@@ -177,14 +282,38 @@ def require_admin(u=Depends(current_user)):
     return u
 
 
+# --------------------------------------------------------------------------- #
+#  Модели запросов
+# --------------------------------------------------------------------------- #
 class LoginIn(BaseModel):
     username: str
     password: str
+
+class Verify2FAIn(BaseModel):
+    challenge_id: str
+    code: str
 
 class RegisterIn(BaseModel):
     username: str
     password: str
     invite_code: str = ""
+
+class ResetCodeIn(BaseModel):
+    username: str
+    recovery_code: str
+    new_password: str
+
+class ResetTgRequestIn(BaseModel):
+    username: str
+
+class ResetTgConfirmIn(BaseModel):
+    challenge_id: str
+    code: str
+    new_password: str
+
+class ChangePassIn(BaseModel):
+    old_password: str
+    new_password: str
 
 class MenuIn(BaseModel):
     name: str
@@ -220,11 +349,25 @@ app = FastAPI(title=APP_NAME)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
+@app.on_event("startup")
+def on_startup():
+    init_telegram_bot()
+    threading.Thread(target=tg_poller, daemon=True).start()
+
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "db": "PostgreSQL (Supabase)"}
+    return {
+        "status": "ok",
+        "db": "PostgreSQL (Supabase)",
+        "tg_enabled": bool(TG_BOT_TOKEN and bot_username),
+        "google_enabled": bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET),
+    }
 
 
+# --------------------------------------------------------------------------- #
+#  Аутентификация, 2FA, Сброс пароля
+# --------------------------------------------------------------------------- #
 @app.post("/api/auth/login")
 def login(b: LoginIn):
     name = normalize(b.username)
@@ -236,7 +379,7 @@ def login(b: LoginIn):
         raise HTTPException(401, "Неверный логин или пароль.")
 
     if rec["locked_until"] > time.time():
-        raise HTTPException(429, f"Аккаунт временно заблокирован. Подождите {int(rec['locked_until'] - time.time()) + 1} сек.")
+        raise HTTPException(429, f"Аккаунт заблокирован. Подождите {int(rec['locked_until'] - time.time()) + 1} сек.")
 
     if not verify_secret(b.password, rec["pw_hash"]):
         failed = rec["failed"] + 1
@@ -246,7 +389,16 @@ def login(b: LoginIn):
         raise HTTPException(401, "Неверный логин или пароль.")
 
     db.execute("UPDATE users SET failed = 0 WHERE username = %s", (name,))
-    return start_session(name)
+    if rec.get("tg_enc") and TG_BOT_TOKEN:
+        cid = send_2fa_code(name, rec, "login")
+        return {"status": "2fa_required", "challenge_id": cid}
+    return {"status": "ok", **start_session(name)}
+
+
+@app.post("/api/auth/2fa")
+def login_2fa(b: Verify2FAIn):
+    name = verify_2fa_code(b.challenge_id, b.code, "login")
+    return {"status": "ok", **start_session(name)}
 
 
 @app.post("/api/auth/register")
@@ -260,14 +412,12 @@ def register(b: RegisterIn):
         raise HTTPException(400, "Этот логин уже занят.")
 
     has_admin = db.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1", (), "one") is not None
-    if has_admin and b.invite_code.strip():
+    if has_admin:
         exp = invites.get(norm_code(b.invite_code))
         if not exp or exp < time.time():
-            raise HTTPException(403, "Неверный или просроченный код приглашения.")
+            raise HTTPException(403, "Нужен действительный код приглашения от администратора.")
         invites.pop(norm_code(b.invite_code), None)
         role = "user"
-    elif has_admin and not b.invite_code.strip():
-        raise HTTPException(403, "Введите код приглашения от администратора.")
     else:
         role = "admin"
 
@@ -280,6 +430,46 @@ def register(b: RegisterIn):
     return {"recovery_code": rec_code, "role": role}
 
 
+@app.post("/api/auth/reset/recovery")
+def reset_by_recovery(b: ResetCodeIn):
+    name = normalize(b.username)
+    if len(b.new_password) < MIN_PASSWORD:
+        raise HTTPException(400, f"Новый пароль должен быть не короче {MIN_PASSWORD} символов.")
+    rec = db.execute("SELECT * FROM users WHERE username = %s", (name,), "one")
+    if not rec or not verify_secret(norm_code(b.recovery_code), rec["rec_hash"]):
+        logger.warning(f"[СБРОС ПАРОЛЯ] Неудачная попытка сброса по коду для '{name}'")
+        raise HTTPException(400, "Неверный логин или резервный код.")
+    new_rec = new_recovery_code()
+    db.execute(
+        "UPDATE users SET pw_hash = %s, rec_hash = %s, failed = 0, locked_until = 0 WHERE username = %s",
+        (hash_secret(b.new_password), hash_secret(norm_code(new_rec)), name)
+    )
+    drop_sessions(name)
+    logger.warning(f"[СБРОС ПАРОЛЯ] Пароль для '{name}' сброшен по резервному коду")
+    return {"new_recovery_code": new_rec}
+
+
+@app.post("/api/auth/reset/tg/request")
+def reset_tg_req(b: ResetTgRequestIn):
+    name = normalize(b.username)
+    rec = db.execute("SELECT * FROM users WHERE username = %s", (name,), "one")
+    if not rec:
+        raise HTTPException(404, "Пользователь не найден.")
+    cid = send_2fa_code(name, rec, "reset")
+    return {"challenge_id": cid}
+
+
+@app.post("/api/auth/reset/tg/confirm")
+def reset_tg_confirm(b: ResetTgConfirmIn):
+    if len(b.new_password) < MIN_PASSWORD:
+        raise HTTPException(400, f"Новый пароль должен быть не короче {MIN_PASSWORD} символов.")
+    name = verify_2fa_code(b.challenge_id, b.code, "reset")
+    db.execute("UPDATE users SET pw_hash = %s, failed = 0, locked_until = 0 WHERE username = %s", (hash_secret(b.new_password), name))
+    drop_sessions(name)
+    logger.warning(f"[СБРОС ПАРОЛЯ] Пароль для '{name}' сброшен через Telegram 2FA")
+    return {"status": "ok"}
+
+
 @app.post("/api/auth/logout")
 def logout(u=Depends(current_user)):
     sessions.pop(u["token"], None)
@@ -287,6 +477,188 @@ def logout(u=Depends(current_user)):
     return {"status": "ok"}
 
 
+# --------------------------------------------------------------------------- #
+#  Профиль, смена пароля и привязка Telegram (QR-код)
+# --------------------------------------------------------------------------- #
+@app.get("/api/me")
+def get_me(u=Depends(current_user)):
+    rec = u["rec"]
+    return {
+        "username": u["name"],
+        "role": u["role"],
+        "tg_linked": bool(rec.get("tg_enc")),
+        "google_email": rec.get("google_email") or "",
+    }
+
+
+@app.post("/api/me/password")
+def change_password(b: ChangePassIn, u=Depends(current_user)):
+    if not verify_secret(b.old_password, u["rec"]["pw_hash"]):
+        raise HTTPException(400, "Текущий пароль введён неверно.")
+    if len(b.new_password) < MIN_PASSWORD:
+        raise HTTPException(400, f"Новый пароль должен быть не короче {MIN_PASSWORD} символов.")
+    db.execute("UPDATE users SET pw_hash = %s WHERE username = %s", (hash_secret(b.new_password), u["name"]))
+    logger.info(f"[БЕЗОПАСНОСТЬ] Пользователь '{u['name']}' сменил пароль")
+    return {"status": "ok"}
+
+
+@app.post("/api/me/telegram/link")
+def create_tg_link(u=Depends(current_user)):
+    if not TG_BOT_TOKEN or not bot_username:
+        raise HTTPException(400, "Telegram-бот не настроен (укажите TG_BOT_TOKEN в переменных Render).")
+    purge()
+    tok = secrets.token_urlsafe(18)
+    link_tokens[tok] = {"name": u["name"], "expires": time.time() + LINK_TTL}
+    url = f"https://t.me/{bot_username}?start={tok}"
+    return {"url": url, "bot": bot_username}
+
+
+@app.delete("/api/me/telegram/link")
+def unlink_tg(u=Depends(current_user)):
+    db.execute("UPDATE users SET tg_enc = '' WHERE username = %s", (u["name"],))
+    logger.warning(f"[БЕЗОПАСНОСТЬ] Пользователь '{u['name']}' отвязал Telegram 2FA")
+    return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------- #
+#  Google OAuth 2.0 (Вход, Регистрация, Привязка)
+# --------------------------------------------------------------------------- #
+def google_exchange(code: str, redirect_uri: str) -> dict:
+    body = urllib.parse.urlencode({
+        "code": code,
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    }).encode("utf-8")
+    req = urllib.request.Request(GOOGLE_TOKEN_URL, data=body, headers={"Content-Type": "application/x-www-form-urlencoded"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        tokens = json.load(resp)
+    id_token = tokens.get("id_token") or ""
+    parts = id_token.split(".")
+    if len(parts) < 2:
+        raise RuntimeError("Некорректный id_token от Google.")
+    pad = "=" * (-len(parts[1]) % 4)
+    return json.loads(base64.urlsafe_b64decode(parts[1] + pad))
+
+
+@app.get("/api/oauth/google/start")
+def google_start(request: Request, mode: Literal["login", "register", "link"] = "login", invite_code: str = "", token: str = ""):
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(400, "Google OAuth не настроен (задайте GOOGLE_CLIENT_ID и GOOGLE_CLIENT_SECRET на Render).")
+    purge()
+    link_user = ""
+    if mode == "link":
+        s = sessions.get(token)
+        if not s or s["expires"] < time.time():
+            raise HTTPException(401, "Сессия истекла.")
+        link_user = s["name"]
+
+    state = secrets.token_urlsafe(24)
+    redirect_uri = str(request.base_url).rstrip("/") + "/api/oauth/google/callback"
+    oauth_states[state] = {
+        "mode": mode,
+        "invite_code": invite_code,
+        "link_user": link_user,
+        "redirect_uri": redirect_uri,
+        "expires": time.time() + 600,
+    }
+    params = urllib.parse.urlencode({
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "prompt": "select_account",
+    })
+    return {"auth_url": f"https://accounts.google.com/o/oauth2/v2/auth?{params}"}
+
+
+@app.get("/api/oauth/google/callback")
+def google_callback(code: str = "", state: str = "", error: str = ""):
+    def popup_html(payload: dict):
+        return HTMLResponse(f"""<!doctype html><html><body style="background:#0f172a;color:#f8fafc;font-family:sans-serif;text-align:center;padding-top:60px">
+        <h3>Авторизация завершена</h3><p>Окно закроется автоматически...</p>
+        <script>
+        if (window.opener) {{ window.opener.postMessage({json.dumps(payload)}, "*"); }}
+        window.close();
+        </script></body></html>""")
+
+    if error or not code or not state:
+        return popup_html({"type": "google_oauth", "ok": False, "error": f"Отменено или ошибка Google: {error or 'нет кода'}"})
+
+    st = oauth_states.pop(state, None)
+    if not st or st["expires"] < time.time():
+        return popup_html({"type": "google_oauth", "ok": False, "error": "Сессия OAuth истекла. Попробуйте снова."})
+
+    try:
+        claims = google_exchange(code, st["redirect_uri"])
+        sub = claims.get("sub", "")
+        email = (claims.get("email") or "").lower()
+        if not sub or not email:
+            return popup_html({"type": "google_oauth", "ok": False, "error": "Google не передал email профиля."})
+
+        mode = st["mode"]
+        if mode == "link":
+            owner = db.execute("SELECT username FROM users WHERE google_sub = %s", (sub,), "one")
+            if owner and owner["username"] != st["link_user"]:
+                return popup_html({"type": "google_oauth", "ok": False, "error": "Этот аккаунт Google уже привязан к другому сотруднику."})
+            db.execute("UPDATE users SET google_sub = %s, google_email = %s WHERE username = %s", (sub, email, st["link_user"]))
+            logger.info(f"[GOOGLE OAUTH] '{st['link_user']}' привязал Google ({email})")
+            return popup_html({"type": "google_oauth", "ok": True, "mode": "link", "email": email})
+
+        if mode == "login":
+            rec = db.execute("SELECT * FROM users WHERE google_sub = %s", (sub,), "one")
+            if not rec:
+                return popup_html({"type": "google_oauth", "ok": False, "error": f"Аккаунт {email} не привязан ни к одному сотруднику."})
+            if rec.get("tg_enc") and TG_BOT_TOKEN:
+                cid = send_2fa_code(rec["username"], rec, "login")
+                return popup_html({"type": "google_oauth", "ok": True, "mode": "2fa", "challenge_id": cid})
+            sess = start_session(rec["username"])
+            return popup_html({"type": "google_oauth", "ok": True, "mode": "login", "session": sess})
+
+        if mode == "register":
+            if db.execute("SELECT 1 FROM users WHERE google_sub = %s", (sub,), "one"):
+                return popup_html({"type": "google_oauth", "ok": False, "error": "Этот Google аккаунт уже зарегистрирован."})
+            has_admin = db.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1", (), "one") is not None
+            if has_admin:
+                exp = invites.get(norm_code(st["invite_code"]))
+                if not exp or exp < time.time():
+                    return popup_html({"type": "google_oauth", "ok": False, "error": "Неверный или просроченный код приглашения."})
+                invites.pop(norm_code(st["invite_code"]), None)
+                role = "user"
+            else:
+                role = "admin"
+
+            base_login = re.sub(r"[^a-z0-9_.-]", "", email.split("@")[0])[:24] or "user"
+            uname = base_login
+            i = 1
+            while db.execute("SELECT 1 FROM users WHERE username = %s", (uname,), "one"):
+                uname = f"{base_login}{i}"
+                i += 1
+            rec_code = new_recovery_code()
+            db.execute(
+                "INSERT INTO users (username, role, pw_hash, rec_hash, google_sub, google_email) VALUES (%s, %s, %s, %s, %s, %s)",
+                (uname, role, hash_secret(secrets.token_urlsafe(24)), hash_secret(norm_code(rec_code)), sub, email)
+            )
+            logger.info(f"[GOOGLE РЕГИСТРАЦИЯ] Зарегистрирован '{uname}' через Google ({email}, роль: {role})")
+            sess = start_session(uname)
+            return popup_html({"type": "google_oauth", "ok": True, "mode": "register", "session": sess, "recovery_code": rec_code})
+
+    except Exception as e:
+        return popup_html({"type": "google_oauth", "ok": False, "error": f"Ошибка OAuth: {e}"})
+
+
+@app.delete("/api/me/google/link")
+def unlink_google(u=Depends(current_user)):
+    db.execute("UPDATE users SET google_sub = NULL, google_email = '' WHERE username = %s", (u["name"],))
+    logger.warning(f"[GOOGLE OAUTH] Пользователь '{u['name']}' отвязал Google")
+    return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------- #
+#  Меню, Заказы, Администрирование, Аудит, Бэкапы (HMAC-SHA256)
+# --------------------------------------------------------------------------- #
 @app.get("/api/menu")
 def get_menu(u=Depends(current_user)):
     rows = db.execute("SELECT * FROM menu ORDER BY id", (), "all")
@@ -533,5 +905,4 @@ if os.path.exists(STATIC_DIR):
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 
 if __name__ == "__main__":
-    logger.info("Запуск облачного веб-сервера SecureVault POS (PostgreSQL)...")
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
