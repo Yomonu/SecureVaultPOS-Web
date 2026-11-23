@@ -3,29 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SecureVault POS — Защищённая облачная система</title>
+<title>SecureVault POS — Защищённая облачная система управления</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
   :root {
     --bg: #070b14;
     --panel: #0f172a;
     --card: #131c31;
-    --card-hover: #18233d;
     --border: #1e293b;
     --border-light: #334155;
     --text: #f8fafc;
     --muted: #94a3b8;
     --accent: #3b82f6;
-    --accent-hover: #2563eb;
     --green: #10b981;
     --amber: #f59e0b;
     --red: #ef4444;
-    --purple: #8b5cf6;
   }
   * { box-sizing: border-box; font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; }
   body { margin: 0; background: radial-gradient(circle at top right, #111b33, var(--bg) 55%); color: var(--text); min-height: 100vh; }
-  
-  /* Кнопки и поля */
+
   input, select {
     background: #090e1a; border: 1px solid var(--border-light); color: var(--text);
     padding: 10px 14px; border-radius: 8px; outline: none; font-size: 14px; transition: 0.2s;
@@ -40,6 +36,8 @@
   button:active { transform: translateY(0); }
   button.sec { background: #1e293b; border: 1px solid var(--border-light); color: #e2e8f0; }
   button.sec:hover { background: #273549; }
+  button.tg { background: #0284c7; border: 1px solid #0369a1; color: #ffffff; }
+  button.tg:hover { background: #0369a1; }
   button.success { background: linear-gradient(135deg, #10b981, #059669); }
   button.danger { background: linear-gradient(135deg, #ef4444, #dc2626); }
   button.google { background: #ffffff; color: #0f172a; border: 1px solid #cbd5e1; }
@@ -48,28 +46,26 @@
 
   .hidden { display: none !important; }
 
-  /* Экран авторизации */
   .auth-wrapper { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
   .auth-card {
-    width: 100%; max-width: 440px; background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(16px);
+    width: 100%; max-width: 440px; background: rgba(15, 23, 42, 0.94); backdrop-filter: blur(16px);
     border: 1px solid var(--border-light); border-radius: 16px; padding: 32px;
     box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
   }
   .brand-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
   .brand-logo {
-    width: 42px; height: 42px; border-radius: 10px; background: linear-gradient(135deg, #3b82f6, #8b5cf6);
-    display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: bold;
+    width: 40px; height: 40px; border-radius: 10px; background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    display: flex; align-items: center; justify-content: center; color: #fff; flex-shrink: 0;
   }
   .auth-tabs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; background: #090e1a; padding: 5px; border-radius: 10px; margin: 20px 0; border: 1px solid var(--border); }
   .auth-tab { background: transparent; color: var(--muted); padding: 8px; font-size: 13px; border-radius: 7px; }
   .auth-tab.active { background: var(--card); color: white; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
   .form-stack { display: flex; flex-direction: column; gap: 12px; }
-  .divider { display: flex; align-items: center; text-align: center; color: var(--muted); font-size: 12px; margin: 6px 0; }
+  .divider { display: flex; align-items: center; text-align: center; color: var(--muted); font-size: 12px; margin: 4px 0; }
   .divider::before, .divider::after { content: ''; flex: 1; border-bottom: 1px solid var(--border-light); }
   .divider:not(:empty)::before { margin-right: 10px; }
   .divider:not(:empty)::after { margin-left: 10px; }
 
-  /* Основной макет приложения (Sidebar + Content) */
   .layout { display: flex; min-height: 100vh; }
   .sidebar {
     width: 265px; background: var(--panel); border-right: 1px solid var(--border);
@@ -88,11 +84,12 @@
   .grid-2 { display: grid; grid-template-columns: 1.5fr 1fr; gap: 20px; }
   @media (max-width: 980px) { .layout { flex-direction: column; } .sidebar { width: 100%; } .grid-2 { grid-template-columns: 1fr; } }
 
-  .badge { padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; }
+  .badge { padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
   .badge-green { background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.3); }
   .badge-blue { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
   .badge-amber { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
   .badge-red { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: inline-block; }
 
   table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
   th { text-align: left; padding: 12px 10px; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border-light); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -106,9 +103,8 @@
   }
   .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
-  /* Модальное окно */
   .modal-bg {
-    position: fixed; inset: 0; background: rgba(3,7,18,0.8); backdrop-filter: blur(6px);
+    position: fixed; inset: 0; background: rgba(3,7,18,0.82); backdrop-filter: blur(6px);
     display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px;
   }
   .modal { background: var(--panel); border: 1px solid var(--border-light); border-radius: 16px; padding: 28px; width: 100%; max-width: 420px; }
@@ -121,7 +117,9 @@
 <div id="auth-view" class="auth-wrapper">
   <div class="auth-card">
     <div class="brand-head">
-      <div class="brand-logo">🛡️</div>
+      <div class="brand-logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      </div>
       <div>
         <h2 style="margin:0; font-size:20px;">SecureVault POS</h2>
         <div style="color:var(--muted); font-size:12.5px;">Защищённая облачная система управления</div>
@@ -129,55 +127,58 @@
     </div>
 
     <div class="auth-tabs">
-      <button class="auth-tab active" onclick="setAuthMode('login', this)">Вход</button>
-      <button class="auth-tab" onclick="setAuthMode('register', this)">Регистрация</button>
-      <button class="auth-tab" onclick="setAuthMode('reset', this)">Сброс пароля</button>
+      <button id="atab-login" class="auth-tab active" onclick="setAuthMode('login', this)">Вход</button>
+      <button id="atab-register" class="auth-tab" onclick="setAuthMode('register', this)">Регистрация</button>
+      <button id="atab-reset" class="auth-tab" onclick="setAuthMode('reset', this)">Сброс пароля</button>
     </div>
 
     <!-- Вкладка 1: Вход -->
-    <div id="form-login" class="form-stack">
-      <input id="l-user" placeholder="Логин сотрудника" autocomplete="username">
-      <input id="l-pass" type="password" placeholder="Пароль" autocomplete="current-password" onkeydown="if(event.key==='Enter') doLogin()">
-      <button onclick="doLogin()">🔐 Войти в систему</button>
-      <div class="divider">или</div>
-      <button class="google" onclick="startGoogleOAuth('login')">
-        <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+    <form id="form-login" class="form-stack" autocomplete="off" onsubmit="event.preventDefault(); doLogin();">
+      <input id="l-user" placeholder="Логин сотрудника" autocomplete="off">
+      <input id="l-pass" type="password" placeholder="Пароль" autocomplete="new-password">
+      <button type="submit">Войти в систему</button>
+      <div class="divider">или без пароля</div>
+      <button type="button" class="tg" onclick="doTgLoginRequest()">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
+        Войти по коду из Telegram
+      </button>
+      <button type="button" class="google" onclick="startGoogleOAuth('login')">
+        <svg width="17" height="17" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
         Войти через Google
       </button>
-    </div>
+    </form>
 
     <!-- Вкладка 2: Регистрация -->
-    <div id="form-register" class="form-stack hidden">
-      <input id="r-user" placeholder="Новый логин (латиница, 3–32 символа)">
-      <input id="r-pass" type="password" placeholder="Пароль (минимум 8 символов)">
-      <input id="r-invite" placeholder="Код приглашения от администратора">
-      <button class="success" onclick="doRegister()">✨ Создать учётную запись</button>
+    <form id="form-register" class="form-stack hidden" autocomplete="off" onsubmit="event.preventDefault(); doRegister();">
+      <input id="r-user" placeholder="Новый логин (латиница, 3–32 символа)" autocomplete="off">
+      <input id="r-pass" type="password" placeholder="Пароль (минимум 8 символов)" autocomplete="new-password">
+      <input id="r-invite" placeholder="Код приглашения от администратора" autocomplete="off">
+      <button type="submit" class="success">Создать учётную запись</button>
       <div class="divider">или быстрая регистрация</div>
-      <button class="google" onclick="startGoogleOAuth('register')">
-        <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+      <button type="button" class="google" onclick="startGoogleOAuth('register')">
+        <svg width="17" height="17" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
         Регистрация через Google (+ инвайт)
       </button>
-    </div>
+    </form>
 
     <!-- Вкладка 3: Сброс пароля -->
-    <div id="form-reset" class="form-stack hidden">
-      <input id="rst-user" placeholder="Логин сотрудника">
-      <input id="rst-newpass" type="password" placeholder="Новый пароль (минимум 8 символов)">
-      <input id="rst-code" placeholder="Резервный код (XXXX-XXXX-XXXX)">
-      <button onclick="doResetRecovery()">🔑 Сбросить по резервному коду</button>
+    <form id="form-reset" class="form-stack hidden" autocomplete="off" onsubmit="event.preventDefault(); doResetRecovery();">
+      <input id="rst-user" placeholder="Логин сотрудника" autocomplete="off">
+      <input id="rst-newpass" type="password" placeholder="Новый пароль (минимум 8 символов)" autocomplete="new-password">
+      <input id="rst-code" placeholder="Резервный код (XXXX-XXXX-XXXX)" autocomplete="off">
+      <button type="submit">Сбросить по резервному коду</button>
       <div class="divider">если привязан Telegram</div>
-      <button class="sec" onclick="doResetTgRequest()">📲 Получить 6-значный код в Telegram</button>
-    </div>
+      <button type="button" class="sec" onclick="doResetTgRequest()">Получить 6-значный код в Telegram</button>
+    </form>
   </div>
 </div>
 
-<!-- ==================== МОДАЛЬНОЕ ОКНО 2FA / QR ==================== -->
+<!-- ==================== МОДАЛЬНОЕ ОКНО 2FA / ВХОДА ПО КОДУ ==================== -->
 <div id="modal-2fa" class="modal-bg hidden">
   <div class="modal" style="text-align:center;">
-    <div style="font-size:34px; margin-bottom:8px;">📲</div>
-    <h3 style="margin:0 0 8px 0;" id="m2fa-title">Двухфакторная аутентификация</h3>
+    <h3 style="margin:0 0 8px 0;" id="m2fa-title">Подтверждение через Telegram</h3>
     <p style="color:var(--muted); font-size:13.5px; margin-bottom:16px;" id="m2fa-desc">Введите 6-значный код подтверждения, отправленный в ваш Telegram.</p>
-    <input id="m2fa-code" maxlength="6" placeholder="000000" style="text-align:center; font-size:22px; letter-spacing:6px; width:100%; margin-bottom:14px;">
+    <input id="m2fa-code" maxlength="6" placeholder="000000" autocomplete="off" onkeydown="if(event.key==='Enter') submit2FA()" style="text-align:center; font-size:22px; letter-spacing:6px; width:100%; margin-bottom:14px;">
     <div class="row" style="justify-content:center;">
       <button class="success" style="flex:1" onclick="submit2FA()">Подтвердить</button>
       <button class="sec" onclick="closeModal('modal-2fa')">Отмена</button>
@@ -190,18 +191,20 @@
   <aside class="sidebar">
     <div>
       <div class="brand-head" style="margin-bottom:24px; padding-left:6px;">
-        <div class="brand-logo" style="width:36px; height:36px; font-size:17px;">🛡️</div>
+        <div class="brand-logo" style="width:34px; height:34px;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
         <div>
-          <div style="font-weight:700; font-size:16px;">SecureVault POS</div>
-          <div style="color:#34d399; font-size:11px;">● PostgreSQL Cloud</div>
+          <div style="font-weight:700; font-size:15.5px;">SecureVault POS</div>
+          <div style="color:#34d399; font-size:11px; display:flex; align-items:center; gap:5px;"><span class="dot"></span> PostgreSQL Cloud</div>
         </div>
       </div>
 
-      <button class="nav-item active" onclick="nav('orders', this)">🛒 Касса и Заказы</button>
-      <button class="nav-item" onclick="nav('menu', this)">🍽️ Меню и Склад</button>
-      <button class="nav-item" onclick="nav('security', this)">🔐 Профиль и 2FA</button>
-      <button id="nav-admin" class="nav-item hidden" onclick="nav('admin', this)">⚙️ Персонал и Бэкапы</button>
-      <button id="nav-logs" class="nav-item hidden" onclick="nav('logs', this)">📋 Журнал Аудита</button>
+      <button id="nav-btn-orders" class="nav-item active" onclick="nav('orders', this)">Касса и Заказы</button>
+      <button id="nav-btn-menu" class="nav-item" onclick="nav('menu', this)">Меню и Склад</button>
+      <button id="nav-btn-security" class="nav-item" onclick="nav('security', this)">Профиль и 2FA</button>
+      <button id="nav-admin" class="nav-item hidden" onclick="nav('admin', this)">Персонал и Бэкапы</button>
+      <button id="nav-logs" class="nav-item hidden" onclick="nav('logs', this)">Журнал Аудита</button>
     </div>
 
     <div style="border-top:1px solid var(--border); padding-top:16px;">
@@ -209,7 +212,7 @@
         <div id="sb-user" style="font-weight:600; font-size:14px;">user</div>
         <div style="margin-top:4px;"><span id="sb-role" class="badge badge-blue">ROLE</span></div>
       </div>
-      <button class="danger" style="width:100%;" onclick="doLogout()">🚪 Выйти</button>
+      <button class="danger" style="width:100%;" onclick="doLogout()">Завершить сессию</button>
     </div>
   </aside>
 
@@ -221,7 +224,7 @@
           <h2 style="margin:0;">Касса и управление заказами</h2>
           <div style="color:var(--muted); font-size:13px;">Оформление чеков с автоматическим списанием остатков со склада</div>
         </div>
-        <button class="sec" onclick="loadOrders()">🔄 Обновить список</button>
+        <button class="sec" onclick="loadOrders()">Обновить список</button>
       </div>
 
       <div class="grid-2">
@@ -253,7 +256,7 @@
               <span>Итого к оплате:</span>
               <span id="cart-total" style="color:#34d399;">0 ₸</span>
             </div>
-            <button class="success" onclick="submitOrder()">💳 Оформить и провести заказ</button>
+            <button class="success" onclick="submitOrder()">Оформить и провести заказ</button>
           </div>
         </div>
       </div>
@@ -266,7 +269,7 @@
           <h2 style="margin:0;">Меню и складской учёт</h2>
           <div style="color:var(--muted); font-size:13px;">Контроль цен, акционных скидок и остатков позиций</div>
         </div>
-        <input id="menu-search" placeholder="🔍 Поиск по названию..." oninput="renderMenu()" style="width:260px;">
+        <input id="menu-search" placeholder="Поиск по названию или категории..." oninput="renderMenu()" style="width:270px;">
       </div>
 
       <div id="menu-add-card" class="card hidden">
@@ -300,12 +303,12 @@
 
       <div class="grid-2">
         <div class="card">
-          <h3 style="margin-top:0;">📲 Двухфакторная аутентификация (Telegram 2FA)</h3>
-          <p style="color:var(--muted); font-size:13.5px;">При включённой защите каждый вход в систему и сброс пароля подтверждаются одноразовым 6-значным кодом в Telegram.</p>
+          <h3 style="margin-top:0;">Двухфакторная аутентификация (Telegram 2FA)</h3>
+          <p style="color:var(--muted); font-size:13.5px;">При включённой защите вход по паролю и сброс пароля подтверждаются одноразовым 6-значным кодом в Telegram, а также становится доступен беспарольный вход по коду.</p>
           <div id="tg-status-box" style="margin-bottom:16px;"></div>
 
           <div class="row">
-            <button onclick="generateTgQR()">📷 Привязать Telegram (QR-код)</button>
+            <button onclick="generateTgQR()">Привязать Telegram (QR-код)</button>
             <button id="btn-tg-unlink" class="danger hidden" onclick="unlinkTg()">Отвязать Telegram</button>
           </div>
 
@@ -314,14 +317,14 @@
             <div style="color:var(--muted); font-size:12.5px;">Или откройте прямую ссылку и нажмите <b>Start</b> в Telegram:</div>
             <div id="qr-container"></div>
             <div><a id="tg-direct-link" href="#" target="_blank" style="color:#60a5fa; font-size:13px; word-break:break-all;"></a></div>
-            <button class="sec sm" style="margin-top:12px;" onclick="loadProfile()">🔄 Проверить статус привязки</button>
+            <button class="sec sm" style="margin-top:12px;" onclick="loadProfile()">Проверить статус привязки</button>
           </div>
         </div>
 
         <div class="form-stack">
           <div class="card" style="margin-bottom:0;">
-            <h3 style="margin-top:0;">🌐 Привязка аккаунта Google</h3>
-            <p style="color:var(--muted); font-size:13.5px;">Позволяет входить в систему в один клик через Google OAuth 2.0.</p>
+            <h3 style="margin-top:0;">Привязка аккаунта Google</h3>
+            <p style="color:var(--muted); font-size:13.5px;">Позволяет входить в систему в один клик через Google OAuth 2.0 без подтверждения в Telegram.</p>
             <div id="google-status-box" style="margin-bottom:14px;"></div>
             <div class="row">
               <button class="google" onclick="startGoogleOAuth('link')">Привязать Google</button>
@@ -330,10 +333,10 @@
           </div>
 
           <div class="card" style="margin-bottom:0;">
-            <h3 style="margin-top:0;">🔑 Смена пароля</h3>
+            <h3 style="margin-top:0;">Смена пароля</h3>
             <div class="form-stack">
-              <input id="cp-old" type="password" placeholder="Текущий пароль">
-              <input id="cp-new" type="password" placeholder="Новый пароль (мин. 8 символов)">
+              <input id="cp-old" type="password" placeholder="Текущий пароль" autocomplete="new-password">
+              <input id="cp-new" type="password" placeholder="Новый пароль (мин. 8 символов)" autocomplete="new-password">
               <button onclick="changePass()">Обновить пароль</button>
             </div>
           </div>
@@ -353,12 +356,12 @@
       <div class="card">
         <div class="row" style="justify-content:space-between;">
           <div class="row">
-            <button onclick="makeInvite()">🎟️ Сгенерировать инвайт-код</button>
-            <button class="success" onclick="downloadFile('/api/admin/backup/excel', 'SecureVault_Report.xlsx')">📊 Отчёт Excel (.xlsx)</button>
-            <button class="sec" onclick="downloadFile('/api/admin/backup/json', 'SecureVault_SignedBackup.json')">💾 Подписанный Бэкап (.json + HMAC)</button>
+            <button onclick="makeInvite()">Сгенерировать инвайт-код</button>
+            <button class="success" onclick="downloadFile('/api/admin/backup/excel', 'SecureVault_Report.xlsx')">Отчёт Excel (.xlsx)</button>
+            <button class="sec" onclick="downloadFile('/api/admin/backup/json', 'SecureVault_SignedBackup.json')">Подписанный Бэкап (.json + HMAC)</button>
           </div>
           <label style="background:#1e293b; border:1px solid var(--border-light); padding:10px 16px; border-radius:8px; cursor:pointer; font-weight:600; font-size:14px;">
-            ♻️ Восстановить БД из .json
+            Восстановить БД из .json
             <input type="file" accept=".json" style="display:none" onchange="restoreBackup(this)">
           </label>
         </div>
@@ -384,12 +387,12 @@
 
       <div class="card">
         <div class="row" style="margin-bottom:14px;">
-          <button class="sec sm" onclick="resetLogs()">🔄 Все записи</button>
+          <button class="sec sm" onclick="resetLogs()">Все записи</button>
           <span style="color:var(--muted); font-size:13px;">С:</span>
           <input id="log-s" placeholder="08:00:00 или 2026-11-23" style="width:175px">
           <span style="color:var(--muted); font-size:13px;">По:</span>
           <input id="log-e" placeholder="18:00:00" style="width:175px">
-          <button class="sm" onclick="loadLogs()">🔍 Фильтр</button>
+          <button class="sm" onclick="loadLogs()">Фильтр</button>
           <button class="sec sm" onclick="presetTime('02:00:00','05:00:00')">Ночь</button>
           <button class="sec sm" onclick="presetTime('08:00:00','12:00:00')">Утро</button>
           <button class="sec sm" onclick="presetTime('14:00:00','17:00:00')">День</button>
@@ -408,6 +411,31 @@ let MENU_CACHE = [];
 let CART = [];
 let PENDING_2FA = { id: '', mode: 'login', newPass: '' };
 
+function clearAllInputs() {
+  const ids = [
+    'l-user', 'l-pass', 'r-user', 'r-pass', 'r-invite',
+    'rst-user', 'rst-newpass', 'rst-code', 'm2fa-code',
+    'cp-old', 'cp-new', 'm-name', 'm-ing', 'm-price',
+    'menu-search', 'log-s', 'log-e'
+  ];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  const ordTable = document.getElementById('ord-table');
+  if (ordTable) ordTable.value = 'Стол №1';
+  const ordQty = document.getElementById('ord-qty');
+  if (ordQty) ordQty.value = '1';
+  const mStock = document.getElementById('m-stock');
+  if (mStock) mStock.value = '30';
+  CART = [];
+  renderCart();
+  PENDING_2FA = { id: '', mode: 'login', newPass: '' };
+  closeModal('modal-2fa');
+  const qrArea = document.getElementById('qr-area');
+  if (qrArea) qrArea.classList.add('hidden');
+}
+
 async function api(method, path, body=null) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
   if (TOKEN) opts.headers['Authorization'] = 'Bearer ' + TOKEN;
@@ -421,7 +449,7 @@ async function api(method, path, body=null) {
   return data;
 }
 
-/* ---------- АВТОРИЗАЦИЯ И 2FA ---------- */
+/* ---------- АВТОРИЗАЦИЯ, ВХОД ЧЕРЕЗ TELEGRAM И 2FA ---------- */
 function setAuthMode(mode, btn) {
   ['login','register','reset'].forEach(m => document.getElementById('form-'+m).classList.add('hidden'));
   document.getElementById('form-'+mode).classList.remove('hidden');
@@ -447,6 +475,19 @@ async function doLogin() {
   } catch (e) { alert(e.message); }
 }
 
+async function doTgLoginRequest() {
+  const username = document.getElementById('l-user').value.trim();
+  if (!username) return alert('Введите ваш логин в верхнее поле, чтобы получить код входа в Telegram.');
+  try {
+    const res = await api('POST', '/api/auth/login/tg/request', { username });
+    PENDING_2FA = { id: res.challenge_id, mode: 'tg_login' };
+    document.getElementById('m2fa-title').textContent = 'Вход по коду из Telegram';
+    document.getElementById('m2fa-desc').textContent = `Одноразовый 6-значный код отправлен в Telegram аккаунта «${username}».`;
+    document.getElementById('m2fa-code').value = '';
+    document.getElementById('modal-2fa').classList.remove('hidden');
+  } catch (e) { alert(e.message); }
+}
+
 async function submit2FA() {
   const code = document.getElementById('m2fa-code').value.trim();
   try {
@@ -454,12 +495,18 @@ async function submit2FA() {
       const res = await api('POST', '/api/auth/2fa', { challenge_id: PENDING_2FA.id, code });
       closeModal('modal-2fa');
       saveSession(res);
+    } else if (PENDING_2FA.mode === 'tg_login') {
+      const res = await api('POST', '/api/auth/login/tg/confirm', { challenge_id: PENDING_2FA.id, code });
+      closeModal('modal-2fa');
+      saveSession(res);
     } else {
       await api('POST', '/api/auth/reset/tg/confirm', {
         challenge_id: PENDING_2FA.id, code, new_password: PENDING_2FA.newPass
       });
       closeModal('modal-2fa');
-      alert('Пароль успешно изменён! Теперь войдите с новым паролем.');
+      clearAllInputs();
+      setAuthMode('login', document.getElementById('atab-login'));
+      alert('Пароль успешно изменён. Теперь войдите с новым паролем.');
     }
   } catch (e) { alert(e.message); }
 }
@@ -471,7 +518,9 @@ async function doRegister() {
       password: document.getElementById('r-pass').value,
       invite_code: document.getElementById('r-invite').value
     });
-    alert(`Учётная запись создана (Роль: ${res.role.toUpperCase()})!\n\nВАШ РЕЗЕРВНЫЙ КОД ВОССТАНОВЛЕНИЯ:\n${res.recovery_code}\n\nОбязательно сохраните его. Теперь перейдите на вкладку «Вход».`);
+    clearAllInputs();
+    setAuthMode('login', document.getElementById('atab-login'));
+    alert(`Учётная запись создана (Роль: ${res.role.toUpperCase()}).\n\nВАШ РЕЗЕРВНЫЙ КОД ВОССТАНОВЛЕНИЯ:\n${res.recovery_code}\n\nОбязательно сохраните его. Теперь выполните вход.`);
   } catch (e) { alert(e.message); }
 }
 
@@ -482,7 +531,9 @@ async function doResetRecovery() {
       recovery_code: document.getElementById('rst-code').value,
       new_password: document.getElementById('rst-newpass').value
     });
-    alert(`Пароль успешно сброшен!\nНовый резервный код: ${res.new_recovery_code}`);
+    clearAllInputs();
+    setAuthMode('login', document.getElementById('atab-login'));
+    alert(`Пароль успешно сброшен.\nНовый резервный код: ${res.new_recovery_code}`);
   } catch (e) { alert(e.message); }
 }
 
@@ -515,20 +566,16 @@ window.addEventListener('message', (ev) => {
   if (d.type !== 'google_oauth') return;
   if (!d.ok) return alert(d.error || 'Ошибка Google OAuth');
   if (d.mode === 'link') {
-    alert(`Аккаунт Google (${d.email}) успешно привязан!`);
+    alert(`Аккаунт Google (${d.email}) успешно привязан.`);
     loadProfile();
-  } else if (d.mode === '2fa') {
-    PENDING_2FA = { id: d.challenge_id, mode: 'login' };
-    document.getElementById('m2fa-title').textContent = 'Подтверждение входа (Telegram 2FA)';
-    document.getElementById('m2fa-code').value = '';
-    document.getElementById('modal-2fa').classList.remove('hidden');
   } else if (d.session) {
-    if (d.recovery_code) alert(`Регистрация через Google завершена!\nВаш резервный код: ${d.recovery_code}`);
+    if (d.recovery_code) alert(`Регистрация через Google завершена.\nВаш резервный код: ${d.recovery_code}`);
     saveSession(d.session);
   }
 });
 
 function saveSession(sess) {
+  clearAllInputs();
   TOKEN = sess.token; USER = sess;
   localStorage.setItem('sv_token', TOKEN);
   localStorage.setItem('sv_user', JSON.stringify(USER));
@@ -538,9 +585,13 @@ function saveSession(sess) {
 function doLogout() {
   if (TOKEN) fetch('/api/auth/logout', { method: 'POST', headers: { 'Authorization': 'Bearer ' + TOKEN } }).catch(()=>{});
   TOKEN = ''; USER = null;
-  localStorage.removeItem('sv_token'); localStorage.removeItem('sv_user');
-  document.getElementById('auth-view').classList.remove('hidden');
+  localStorage.removeItem('sv_token');
+  localStorage.removeItem('sv_user');
+  clearAllInputs();
+  setAuthMode('login', document.getElementById('atab-login'));
+  nav('orders', document.getElementById('nav-btn-orders'));
   document.getElementById('app-view').classList.add('hidden');
+  document.getElementById('auth-view').classList.remove('hidden');
 }
 
 function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
@@ -567,19 +618,19 @@ function nav(sec, btn) {
   ['orders','menu','security','admin','logs'].forEach(s => document.getElementById('sec-'+s).classList.add('hidden'));
   document.getElementById('sec-'+sec).classList.remove('hidden');
   document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
+  if (btn) btn.classList.add('active');
 }
 
 /* ---------- ПРОФИЛЬ И QR-КОД TELEGRAM ---------- */
 async function loadProfile() {
   const me = await api('GET', '/api/me');
   document.getElementById('tg-status-box').innerHTML = me.tg_linked
-    ? `<span class="badge badge-green">● Telegram 2FA активен и защищает вход</span>`
-    : `<span class="badge badge-amber">● Telegram 2FA не привязан</span>`;
+    ? `<span class="badge badge-green"><span class="dot"></span> Telegram 2FA активен и защищает вход</span>`
+    : `<span class="badge badge-amber"><span class="dot"></span> Telegram 2FA не привязан</span>`;
   document.getElementById('btn-tg-unlink').classList.toggle('hidden', !me.tg_linked);
 
   document.getElementById('google-status-box').innerHTML = me.google_email
-    ? `<span class="badge badge-blue">● Привязан: ${me.google_email}</span>`
+    ? `<span class="badge badge-blue"><span class="dot"></span> Привязан: ${me.google_email}</span>`
     : `<span class="badge" style="background:#1e293b;color:var(--muted)">Не привязан</span>`;
   document.getElementById('btn-gg-unlink').classList.toggle('hidden', !me.google_email);
 }
@@ -616,7 +667,7 @@ async function changePass() {
     });
     document.getElementById('cp-old').value = '';
     document.getElementById('cp-new').value = '';
-    alert('Пароль успешно обновлён!');
+    alert('Пароль успешно обновлён.');
   } catch (e) { alert(e.message); }
 }
 
@@ -647,7 +698,7 @@ function renderMenu() {
       <td>${isMgr ? `
         <button class="sec sm" onclick="updStock(${m.id})">Склад</button>
         <button class="sec sm" onclick="updDisc(${m.id})">Скидка</button>
-        <button class="danger sm" onclick="delMenu(${m.id})">✕</button>` : '-'}
+        <button class="danger sm" onclick="delMenu(${m.id})">Удалить</button>` : '-'}
       </td>
     </tr>`).join('');
 }
@@ -674,7 +725,7 @@ function renderCart() {
     sum += c.price * c.qty;
     return `<div style="display:flex; justify-content:space-between; margin-bottom:6px;">
       <span>${c.name} × <b>${c.qty}</b></span>
-      <span>${c.price * c.qty} ₸ <a href="#" onclick="CART.splice(${idx},1);renderCart();return false;" style="color:#f87171;text-decoration:none;margin-left:6px;">✕</a></span>
+      <span>${c.price * c.qty} ₸ <a href="#" onclick="CART.splice(${idx},1);renderCart();return false;" style="color:#f87171;text-decoration:none;margin-left:6px;">[x]</a></span>
     </div>`;
   }).join('');
   document.getElementById('cart-total').textContent = `${sum} ₸`;
@@ -704,6 +755,8 @@ async function addMenuItem() {
       stock: parseInt(document.getElementById('m-stock').value)
     });
     document.getElementById('m-name').value = '';
+    document.getElementById('m-ing').value = '';
+    document.getElementById('m-price').value = '';
     loadMenu();
   } catch (e) { alert(e.message); }
 }
@@ -726,9 +779,9 @@ async function loadOrders() {
       <td><span class="badge ${stBadge(o.status)}">${o.status}</span></td>
       <td>${o.waiter}<div style="font-size:11px;color:var(--muted)">${o.created_at}</div></td>
       <td>
-        <button class="success sm" onclick="setOrderSt(${o.id}, 'Выполнен')" title="Выполнен">✓</button>
-        <button class="sec sm" onclick="setOrderSt(${o.id}, 'Отменен')" title="Отменить">Отмена</button>
-        ${isMgr ? `<button class="danger sm" onclick="delOrder(${o.id})">✕</button>` : ''}
+        <button class="success sm" onclick="setOrderSt(${o.id}, 'Выполнен')">Готов</button>
+        <button class="sec sm" onclick="setOrderSt(${o.id}, 'Отменен')">Отмена</button>
+        ${isMgr ? `<button class="danger sm" onclick="delOrder(${o.id})">Удалить</button>` : ''}
       </td>
     </tr>`).join('');
 }
@@ -778,7 +831,7 @@ async function restoreBackup(input) {
   try {
     const json = JSON.parse(await file.text());
     await api('POST', '/api/admin/restore/json', json);
-    alert('✅ База данных успешно восстановлена! Контрольная сумма HMAC-SHA256 подтверждена.');
+    alert('База данных успешно восстановлена. Контрольная сумма HMAC-SHA256 подтверждена.');
     loadMenu(); loadOrders(); loadUsers(); loadLogs();
   } catch (e) { alert(e.message); }
   input.value = '';
