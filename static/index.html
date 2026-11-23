@@ -1,10 +1,308 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <title>Title</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SecureVault POS — Облачная система управления</title>
+<style>
+  :root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #f1f5f9; --muted: #94a3b8; --accent: #3b82f6; --green: #10b981; --red: #ef4444; }
+  * { box-sizing: border-box; font-family: 'Segoe UI', system-ui, sans-serif; }
+  body { margin: 0; background: var(--bg); color: var(--text); }
+  .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+  input, select { background: #0f172a; border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; outline: none; }
+  input:focus { border-color: var(--accent); }
+  button { background: var(--accent); color: white; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+  button:hover { opacity: 0.9; }
+  button.sec { background: #334155; }
+  button.danger { background: var(--red); }
+  button.success { background: var(--green); }
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-wrap: wrap; }
+  .tab { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+  .tab.active { background: var(--accent); color: white; border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 10px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  .badge { padding: 3px 8px; border-radius: 12px; font-size: 12px; background: #334155; }
+  .log-box { background: #090d16; font-family: Consolas, monospace; font-size: 13px; padding: 12px; height: 360px; overflow: auto; border-radius: 6px; border: 1px solid var(--border); white-space: pre; color: #cbd5e1; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .hidden { display: none !important; }
+</style>
 </head>
 <body>
+<div class="container">
+  <div id="auth-view" class="card" style="max-width: 420px; margin: 60px auto;">
+    <h2 style="margin-top:0">🔐 SecureVault POS (Cloud)</h2>
+    <p style="color:var(--muted); font-size:13px">Облачная POS-система с СУБД PostgreSQL и контролем целостности</p>
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      <input id="u-login" placeholder="Логин сотрудника">
+      <input id="u-pass" type="password" placeholder="Пароль (мин. 8 символов)">
+      <input id="u-invite" placeholder="Код приглашения (только при регистрации)">
+      <button onclick="doLogin()">Войти в систему</button>
+      <button class="sec" onclick="doRegister()">Зарегистрироваться</button>
+    </div>
+  </div>
 
+  <div id="app-view" class="hidden">
+    <div class="card row" style="justify-content:space-between;">
+      <div>
+        <strong id="user-badge">Пользователь</strong>
+        <span class="badge" style="margin-left:8px; color:#34d399">● PostgreSQL Cloud Connected</span>
+      </div>
+      <button class="danger" onclick="doLogout()">Завершить сессию</button>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('orders', this)">🛒 Касса и Заказы</button>
+      <button class="tab" onclick="switchTab('menu', this)">🍕 Меню и Склад</button>
+      <button id="tab-btn-admin" class="tab hidden" onclick="switchTab('admin', this)">⚙️ Персонал и Бэкапы</button>
+      <button id="tab-btn-logs" class="tab hidden" onclick="switchTab('logs', this)">📋 Журнал Аудита</button>
+    </div>
+
+    <div id="tab-orders" class="card">
+      <div class="row">
+        <input id="ord-table" value="Стол №1" style="width:120px">
+        <select id="ord-type"><option>В заведении</option><option>На вынос</option></select>
+        <select id="ord-pay"><option>Карта</option><option>Наличные</option></select>
+        <select id="ord-dish"></select>
+        <input id="ord-qty" type="number" value="1" min="1" style="width:70px">
+        <button class="success" onclick="createQuickOrder()">+ Оформить заказ</button>
+        <button class="sec" onclick="loadOrders()">Обновить</button>
+      </div>
+      <table>
+        <thead><tr><th>№</th><th>Стол</th><th>Тип</th><th>Состав</th><th>Сумма</th><th>Оплата</th><th>Статус</th><th>Кассир</th><th>Время</th><th>Действие</th></tr></thead>
+        <tbody id="orders-body"></tbody>
+      </table>
+    </div>
+
+    <div id="tab-menu" class="card hidden">
+      <div id="menu-controls" class="row hidden">
+        <input id="m-name" placeholder="Название блюда">
+        <select id="m-cat"><option>Первые блюда</option><option>Вторые блюда</option><option>Гарниры</option><option>Салаты</option><option>Десерты</option><option>Напитки</option></select>
+        <input id="m-price" type="number" placeholder="Цена (₸)" style="width:110px">
+        <input id="m-stock" type="number" placeholder="Остаток" value="30" style="width:90px">
+        <button class="success" onclick="addMenuItem()">+ Добавить</button>
+      </div>
+      <table>
+        <thead><tr><th>ID</th><th>Наименование</th><th>Категория</th><th>Состав</th><th>Цена</th><th>Скидка</th><th>Остаток</th><th>Действия</th></tr></thead>
+        <tbody id="menu-body"></tbody>
+      </table>
+    </div>
+
+    <div id="tab-admin" class="card hidden">
+      <div class="row">
+        <button onclick="makeInvite()">🎟️ Создать код приглашения</button>
+        <button class="success" onclick="downloadFile('/api/admin/backup/excel', 'SecureVault_Report.xlsx')">📊 Отчёт в Excel (.xlsx)</button>
+        <button class="success" onclick="downloadFile('/api/admin/backup/json', 'SecureVault_SignedBackup.json')">💾 Подписанный Бэкап БД (.json + HMAC)</button>
+        <label style="background:#334155; padding:8px 14px; border-radius:6px; cursor:pointer; font-weight:600;">
+          ♻️ Восстановить из Бэкапа (.json)
+          <input type="file" accept=".json" style="display:none" onchange="restoreBackup(this)">
+        </label>
+      </div>
+      <table>
+        <thead><tr><th>Логин</th><th>Роль</th><th>Telegram 2FA</th><th>Google</th><th>Управление</th></tr></thead>
+        <tbody id="users-body"></tbody>
+      </table>
+    </div>
+
+    <div id="tab-logs" class="card hidden">
+      <div class="row">
+        <button class="sec" onclick="resetLogs()">🔄 Сброс</button>
+        <span>С:</span><input id="log-s" placeholder="08:00:00 или 2026-11-23" style="width:170px">
+        <span>По:</span><input id="log-e" placeholder="18:00:00" style="width:170px">
+        <button onclick="loadLogs()">🔍 Применить</button>
+        <button class="sec" onclick="presetTime('02:00:00','05:00:00')">Ночь</button>
+        <button class="sec" onclick="presetTime('08:00:00','12:00:00')">Утро</button>
+        <button class="sec" onclick="presetTime('14:00:00','17:00:00')">День</button>
+        <button class="sec" onclick="presetTime('18:00:00','23:00:00')">Вечер</button>
+      </div>
+      <div id="log-box" class="log-box"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let TOKEN = localStorage.getItem('sv_token') || '';
+let USER = JSON.parse(localStorage.getItem('sv_user') || 'null');
+
+async function api(method, path, body=null) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (TOKEN) opts.headers['Authorization'] = 'Bearer ' + TOKEN;
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (res.status === 401) doLogout();
+    throw new Error(data.detail || 'Ошибка запроса');
+  }
+  return data;
+}
+
+async function doLogin() {
+  try {
+    const res = await api('POST', '/api/auth/login', {
+      username: document.getElementById('u-login').value,
+      password: document.getElementById('u-pass').value
+    });
+    TOKEN = res.token; USER = res;
+    localStorage.setItem('sv_token', TOKEN);
+    localStorage.setItem('sv_user', JSON.stringify(USER));
+    initApp();
+  } catch (e) { alert(e.message); }
+}
+
+async function doRegister() {
+  try {
+    const res = await api('POST', '/api/auth/register', {
+      username: document.getElementById('u-login').value,
+      password: document.getElementById('u-pass').value,
+      invite_code: document.getElementById('u-invite').value
+    });
+    alert(`Сотрудник зарегистрирован (Роль: ${res.role})!\nЗапишите резервный код: ${res.recovery_code}\nТеперь нажмите «Войти в систему».`);
+  } catch (e) { alert(e.message); }
+}
+
+function doLogout() {
+  if (TOKEN) fetch('/api/auth/logout', { method: 'POST', headers: { 'Authorization': 'Bearer ' + TOKEN } }).catch(()=>{});
+  TOKEN = ''; USER = null;
+  localStorage.removeItem('sv_token'); localStorage.removeItem('sv_user');
+  document.getElementById('auth-view').classList.remove('hidden');
+  document.getElementById('app-view').classList.add('hidden');
+}
+
+function initApp() {
+  if (!TOKEN || !USER) return;
+  document.getElementById('auth-view').classList.add('hidden');
+  document.getElementById('app-view').classList.remove('hidden');
+  document.getElementById('user-badge').textContent = `Пользователь: ${USER.username} | Роль: ${USER.role.toUpperCase()}`;
+
+  const isMgr = ['admin', 'manager'].includes(USER.role);
+  const isAdm = USER.role === 'admin';
+  document.getElementById('menu-controls').classList.toggle('hidden', !isMgr);
+  document.getElementById('tab-btn-admin').classList.toggle('hidden', !isAdm);
+  document.getElementById('tab-btn-logs').classList.toggle('hidden', !isAdm);
+
+  loadMenu(); loadOrders();
+  if (isAdm) { loadUsers(); loadLogs(); }
+}
+
+function switchTab(name, btn) {
+  ['orders','menu','admin','logs'].forEach(t => document.getElementById('tab-'+t).classList.add('hidden'));
+  document.getElementById('tab-'+name).classList.remove('hidden');
+  document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+async function loadMenu() {
+  const items = await api('GET', '/api/menu');
+  const sel = document.getElementById('ord-dish');
+  sel.innerHTML = items.map(m => `<option value="${m.id}">${m.name} (${m.price} ₸ | ост. ${m.stock})</option>`).join('');
+  const isMgr = ['admin', 'manager'].includes(USER.role);
+  document.getElementById('menu-body').innerHTML = items.map(m => `
+    <tr>
+      <td>${m.id}</td><td><strong>${m.name}</strong></td><td>${m.category}</td><td style="color:var(--muted)">${m.ingredients}</td>
+      <td>${m.price} ₸</td><td>${m.discount}%</td><td>${m.stock} шт</td>
+      <td>${isMgr ? `<button class="sec" onclick="updStock(${m.id})">Склад</button> <button class="danger" onclick="delMenu(${m.id})">✕</button>` : '-'}</td>
+    </tr>`).join('');
+}
+
+async function addMenuItem() {
+  try {
+    await api('POST', '/api/menu', {
+      name: document.getElementById('m-name').value,
+      category: document.getElementById('m-cat').value,
+      price: parseFloat(document.getElementById('m-price').value),
+      stock: parseInt(document.getElementById('m-stock').value)
+    });
+    loadMenu();
+  } catch (e) { alert(e.message); }
+}
+
+async function updStock(id) {
+  const val = prompt('Новый остаток (шт):', '50');
+  if (val !== null) { await api('PATCH', `/api/menu/${id}/stock`, { stock: parseInt(val) }); loadMenu(); }
+}
+async function delMenu(id) {
+  if (confirm('Удалить блюдо?')) { await api('DELETE', `/api/menu/${id}`); loadMenu(); }
+}
+
+async function loadOrders() {
+  const list = await api('GET', '/api/orders');
+  const isMgr = ['admin', 'manager'].includes(USER.role);
+  document.getElementById('orders-body').innerHTML = list.map(o => `
+    <tr>
+      <td>#${o.id}</td><td>${o.table}</td><td>${o.type}</td><td>${o.items}</td>
+      <td><strong>${o.total} ₸</strong></td><td>${o.payment}</td><td><span class="badge">${o.status}</span></td>
+      <td>${o.waiter}</td><td>${o.created_at}</td>
+      <td>
+        <button class="sec" onclick="setOrderSt(${o.id}, 'Выполнен')">✓</button>
+        <button class="sec" onclick="setOrderSt(${o.id}, 'Отменен')">Отмена</button>
+        ${isMgr ? `<button class="danger" onclick="delOrder(${o.id})">✕</button>` : ''}
+      </td>
+    </tr>`).join('');
+}
+
+async function createQuickOrder() {
+  try {
+    await api('POST', '/api/orders', {
+      table: document.getElementById('ord-table').value,
+      type: document.getElementById('ord-type').value,
+      payment: document.getElementById('ord-pay').value,
+      items: [{ id: parseInt(document.getElementById('ord-dish').value), qty: parseInt(document.getElementById('ord-qty').value) }]
+    });
+    loadOrders(); loadMenu();
+  } catch (e) { alert(e.message); }
+}
+
+async function setOrderSt(id, status) {
+  try { await api('PATCH', `/api/orders/${id}/status`, { status }); loadOrders(); loadMenu(); } catch(e){ alert(e.message); }
+}
+async function delOrder(id) {
+  if (confirm('Удалить заказ?')) { await api('DELETE', `/api/orders/${id}`); loadOrders(); loadMenu(); }
+}
+
+async function loadUsers() {
+  const users = await api('GET', '/api/admin/users');
+  document.getElementById('users-body').innerHTML = users.map(u => `
+    <tr>
+      <td><strong>${u.login}</strong></td><td>${u.role}</td><td>${u.tg ? 'Привязан' : 'Нет'}</td><td>${u.google_email || '-'}</td>
+      <td>${u.role !== 'admin' ? `<button class="sec" onclick="setRole('${u.login}','manager')">Менеджер</button> <button class="sec" onclick="setRole('${u.login}','user')">Кассир</button> <button class="danger" onclick="delUser('${u.login}')">Удалить</button>` : 'Главный админ'}</td>
+    </tr>`).join('');
+}
+
+async function setRole(login, role) { await api('PATCH', `/api/admin/users/${login}/role`, { role }); loadUsers(); }
+async function delUser(login) { if (confirm('Удалить сотрудника?')) { await api('DELETE', `/api/admin/users/${login}`); loadUsers(); } }
+async function makeInvite() { const r = await api('POST', '/api/admin/invites'); prompt('Одноразовый код приглашения (действует 24ч):', r.code); }
+
+async function loadLogs() {
+  const s = document.getElementById('log-s').value;
+  const e = document.getElementById('log-e').value;
+  const r = await api('GET', `/api/admin/logs?start_time=${encodeURIComponent(s)}&end_time=${encodeURIComponent(e)}`);
+  document.getElementById('log-box').textContent = r.logs.join('\n');
+}
+function presetTime(s, e) { document.getElementById('log-s').value = s; document.getElementById('log-e').value = e; loadLogs(); }
+function resetLogs() { document.getElementById('log-s').value = ''; document.getElementById('log-e').value = ''; loadLogs(); }
+
+async function downloadFile(url, filename) {
+  const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } });
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+}
+
+async function restoreBackup(input) {
+  const file = input.files[0];
+  if (!file) return;
+  try {
+    const json = JSON.parse(await file.text());
+    await api('POST', '/api/admin/restore/json', json);
+    alert('База данных успешно восстановлена! Контрольная сумма HMAC-SHA256 подтверждена.');
+    loadMenu(); loadOrders(); loadUsers(); loadLogs();
+  } catch (e) { alert(e.message); }
+  input.value = '';
+}
+
+initApp();
+</script>
 </body>
 </html>
