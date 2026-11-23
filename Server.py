@@ -104,7 +104,7 @@ def unit_price(price: float, discount: int) -> float:
 class PostgresDB:
     def __init__(self, dsn: str):
         if not dsn:
-            raise RuntimeError("Не задан DATABASE_URL в переменных окружения!")
+            raise RuntimeError("Не задан DATABASE_URL в переменных окружения.")
         self.dsn = dsn
         self.lock = threading.RLock()
         self._fernet = Fernet(MASTER_KEY.encode())
@@ -209,7 +209,7 @@ def tg_poller():
                     continue
                 db.execute("UPDATE users SET tg_enc = %s WHERE username = %s", (db.enc(str(chat_id)), entry["name"]))
                 logger.info(f"[2FA ПРИВЯЗКА] Пользователь '{entry['name']}' привязал Telegram (chat_id={chat_id})")
-                tg_call("sendMessage", {"chat_id": chat_id, "text": f"✅ Telegram успешно привязан к учётной записи «{entry['name']}»."})
+                tg_call("sendMessage", {"chat_id": chat_id, "text": f"Telegram успешно привязан к учётной записи «{entry['name']}»."})
         except Exception:
             time.sleep(3)
 
@@ -224,9 +224,14 @@ def send_2fa_code(name: str, rec: dict, kind: str) -> str:
         "hash": hash_secret(code),
         "expires": time.time() + CODE_TTL, "tries": CODE_TRIES,
     }
-    label = "входа в систему" if kind == "login" else "сброса пароля"
+    labels = {
+        "login": "подтверждения входа",
+        "tg_login": "входа по коду Telegram",
+        "reset": "сброса пароля"
+    }
+    label = labels.get(kind, "подтверждения операции")
     try:
-        tg_call("sendMessage", {"chat_id": cid, "text": f"🔐 {APP_NAME}\nКод подтверждения для {label}: {code}\nДействует 5 минут."})
+        tg_call("sendMessage", {"chat_id": cid, "text": f"{APP_NAME}\nКод для {label}: {code}\nДействует 5 минут."})
     except Exception:
         challenges.pop(cid_token, None)
         raise HTTPException(502, "Не удалось отправить код в Telegram. Проверьте TG_BOT_TOKEN.")
@@ -282,12 +287,12 @@ def require_admin(u=Depends(current_user)):
     return u
 
 
-# --------------------------------------------------------------------------- #
-#  Модели запросов
-# --------------------------------------------------------------------------- #
 class LoginIn(BaseModel):
     username: str
     password: str
+
+class TgLoginReqIn(BaseModel):
+    username: str
 
 class Verify2FAIn(BaseModel):
     challenge_id: str
@@ -365,9 +370,6 @@ def health():
     }
 
 
-# --------------------------------------------------------------------------- #
-#  Аутентификация, 2FA, Сброс пароля
-# --------------------------------------------------------------------------- #
 @app.post("/api/auth/login")
 def login(b: LoginIn):
     name = normalize(b.username)
@@ -398,6 +400,32 @@ def login(b: LoginIn):
 @app.post("/api/auth/2fa")
 def login_2fa(b: Verify2FAIn):
     name = verify_2fa_code(b.challenge_id, b.code, "login")
+    return {"status": "ok", **start_session(name)}
+
+
+@app.post("/api/auth/login/tg/request")
+def login_tg_request(b: TgLoginReqIn):
+    name = normalize(b.username)
+    purge()
+    if not TG_BOT_TOKEN:
+        raise HTTPException(400, "Telegram-бот не настроен на сервере.")
+    rec = db.execute("SELECT * FROM users WHERE username = %s", (name,), "one")
+    if not rec:
+        raise HTTPException(404, "Учётная запись с таким логином не найдена.")
+    if rec["locked_until"] > time.time():
+        raise HTTPException(429, f"Аккаунт заблокирован. Подождите {int(rec['locked_until'] - time.time()) + 1} сек.")
+    if not rec.get("tg_enc"):
+        raise HTTPException(400, "К этому аккаунту не привязан Telegram. Войдите по паролю и привяжите его в профиле.")
+    cid = send_2fa_code(name, rec, "tg_login")
+    logger.info(f"[TELEGRAM ВХОД] Запрошен одноразовый код входа для '{name}'")
+    return {"challenge_id": cid}
+
+
+@app.post("/api/auth/login/tg/confirm")
+def login_tg_confirm(b: Verify2FAIn):
+    name = verify_2fa_code(b.challenge_id, b.code, "tg_login")
+    db.execute("UPDATE users SET failed = 0 WHERE username = %s", (name,))
+    logger.info(f"[TELEGRAM ВХОД] Успешный беспарольный вход для '{name}'")
     return {"status": "ok", **start_session(name)}
 
 
@@ -477,9 +505,6 @@ def logout(u=Depends(current_user)):
     return {"status": "ok"}
 
 
-# --------------------------------------------------------------------------- #
-#  Профиль, смена пароля и привязка Telegram (QR-код)
-# --------------------------------------------------------------------------- #
 @app.get("/api/me")
 def get_me(u=Depends(current_user)):
     rec = u["rec"]
@@ -521,7 +546,7 @@ def unlink_tg(u=Depends(current_user)):
 
 
 # --------------------------------------------------------------------------- #
-#  Google OAuth 2.0 (Вход, Регистрация, Привязка)
+#  Google OAuth 2.0 (Прямой вход без Telegram 2FA, Регистрация, Привязка)
 # --------------------------------------------------------------------------- #
 def google_exchange(code: str, redirect_uri: str) -> dict:
     body = urllib.parse.urlencode({
@@ -611,9 +636,10 @@ def google_callback(code: str = "", state: str = "", error: str = ""):
             rec = db.execute("SELECT * FROM users WHERE google_sub = %s", (sub,), "one")
             if not rec:
                 return popup_html({"type": "google_oauth", "ok": False, "error": f"Аккаунт {email} не привязан ни к одному сотруднику."})
-            if rec.get("tg_enc") and TG_BOT_TOKEN:
-                cid = send_2fa_code(rec["username"], rec, "login")
-                return popup_html({"type": "google_oauth", "ok": True, "mode": "2fa", "challenge_id": cid})
+            if rec["locked_until"] > time.time():
+                return popup_html({"type": "google_oauth", "ok": False, "error": "Учётная запись временно заблокирована."})
+            db.execute("UPDATE users SET failed = 0 WHERE username = %s", (rec["username"],))
+            logger.info(f"[GOOGLE OAUTH] Прямой вход сотрудника '{rec['username']}' ({email})")
             sess = start_session(rec["username"])
             return popup_html({"type": "google_oauth", "ok": True, "mode": "login", "session": sess})
 
@@ -656,9 +682,6 @@ def unlink_google(u=Depends(current_user)):
     return {"status": "ok"}
 
 
-# --------------------------------------------------------------------------- #
-#  Меню, Заказы, Администрирование, Аудит, Бэкапы (HMAC-SHA256)
-# --------------------------------------------------------------------------- #
 @app.get("/api/menu")
 def get_menu(u=Depends(current_user)):
     rows = db.execute("SELECT * FROM menu ORDER BY id", (), "all")
