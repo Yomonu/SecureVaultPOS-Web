@@ -695,18 +695,24 @@ def add_menu(b: MenuIn, u=Depends(require_manager)):
         "INSERT INTO menu (name, category, ingredients, price, discount, stock) VALUES (%s, %s, %s, %s, 0, %s) RETURNING *",
         (b.name.strip(), b.category.strip(), b.ingredients.strip(), b.price, b.stock), "one"
     )
+    if row:
+        row["price"] = float(row["price"])
     logger.info(f"[МЕНЮ] '{u['name']}' добавил блюдо '{b.name}' ({b.price} тг)")
     return row
 
 @app.patch("/api/menu/{item_id}/discount")
 def set_discount(item_id: int, b: DiscountIn, u=Depends(require_manager)):
-    db.execute("UPDATE menu SET discount = %s WHERE id = %s", (b.discount, item_id))
+    row = db.execute("UPDATE menu SET discount = %s WHERE id = %s RETURNING id", (b.discount, item_id), "one")
+    if not row:
+        raise HTTPException(404, "Позиция в меню не найдена.")
     logger.info(f"[МЕНЮ] '{u['name']}' установил скидку {b.discount}% на ID #{item_id}")
     return {"status": "ok"}
 
 @app.patch("/api/menu/{item_id}/stock")
 def set_stock(item_id: int, b: StockIn, u=Depends(require_manager)):
-    db.execute("UPDATE menu SET stock = %s WHERE id = %s", (b.stock, item_id))
+    row = db.execute("UPDATE menu SET stock = %s WHERE id = %s RETURNING id", (b.stock, item_id), "one")
+    if not row:
+        raise HTTPException(404, "Позиция в меню не найдена.")
     logger.info(f"[СКЛАД] '{u['name']}' обновил остаток ID #{item_id} до {b.stock}")
     return {"status": "ok"}
 
@@ -769,14 +775,21 @@ def update_order_status(order_id: int, b: StatusIn, u=Depends(current_user)):
     row = db.execute("SELECT status FROM orders WHERE id = %s", (order_id,), "one")
     if not row:
         raise HTTPException(404, "Заказ не найден.")
-    if row["status"] == "Отменен":
-        raise HTTPException(409, "Отменённый заказ изменить нельзя.")
-    if b.status == "Отменен":
+    prev_status = row["status"]
+    if prev_status == b.status:
+        return {"status": "ok"}
+
+    if b.status == "Отменен" and prev_status != "Отменен":
         items = db.execute("SELECT menu_item_id, qty FROM order_items WHERE order_id = %s", (order_id,), "all")
         for it in items:
             db.execute("UPDATE menu SET stock = stock + %s WHERE id = %s", (it["qty"], it["menu_item_id"]))
+    elif prev_status == "Отменен" and b.status != "Отменен":
+        items = db.execute("SELECT menu_item_id, qty FROM order_items WHERE order_id = %s", (order_id,), "all")
+        for it in items:
+            db.execute("UPDATE menu SET stock = GREATEST(stock - %s, 0) WHERE id = %s", (it["qty"], it["menu_item_id"]))
+
     db.execute("UPDATE orders SET status = %s WHERE id = %s", (b.status, order_id))
-    logger.info(f"[ЗАКАЗ] Статус заказа #{order_id} изменён на '{b.status}' ({u['name']})")
+    logger.info(f"[ЗАКАЗ] Статус заказа #{order_id} изменён с '{prev_status}' на '{b.status}' ({u['name']})")
     return {"status": "ok"}
 
 @app.delete("/api/orders/{order_id}")
@@ -814,6 +827,7 @@ def delete_user(name: str, u=Depends(require_admin)):
     rec = db.execute("SELECT role FROM users WHERE username = %s", (n,), "one")
     if not rec or rec["role"] == "admin" or n == u["name"]:
         raise HTTPException(409, "Нельзя удалить администратора или самого себя.")
+    db.execute("UPDATE orders SET waiter = %s WHERE waiter = %s", (u["name"], n))
     db.execute("DELETE FROM users WHERE username = %s", (n,))
     drop_sessions(n)
     logger.warning(f"[БЕЗОПАСНОСТЬ] Админ '{u['name']}' удалил сотрудника '{n}'")
