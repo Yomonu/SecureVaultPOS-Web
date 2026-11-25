@@ -28,7 +28,7 @@ p{margin:0}
 /* controls */
 input,select{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:0 12px;height:44px;width:100%;min-width:0;outline:none}
 input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(14,92,87,.18)}
-button{font:inherit;font-weight:600;border:1px solid transparent;border-radius:10px;height:44px;padding:0 16px;cursor:pointer;background:var(--accent);color:#fff;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:background .15s;white-space:nowrap}
+button{font:inherit;font-weight:600;border:1px solid transparent;border-radius:10px;height:44px;padding:0 16px;cursor:pointer;background:var(--accent);color:#fff;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:background .15s,transform .12s,border-color .15s;white-space:nowrap}
 button:hover{background:var(--accent-d)}
 button:focus-visible,a:focus-visible,.dish:focus-visible{outline:3px solid rgba(14,92,87,.45);outline-offset:2px}
 button.sec{background:var(--surface);color:var(--ink);border-color:var(--line)} button.sec:hover{background:var(--line-2)}
@@ -37,7 +37,7 @@ button.danger{background:var(--bad-soft);color:var(--bad);border-color:#EBC3BE} 
 button.sm{height:36px;padding:0 12px;font-size:13px;border-radius:8px}
 button.tg{background:#1D7FB8} button.tg:hover{background:#17679A}
 button.google{background:#fff;color:var(--ink);border-color:var(--line)} button.google:hover{background:var(--line-2)}
-button:disabled{opacity:.5;cursor:not-allowed}
+button:disabled{opacity:.45;cursor:not-allowed}
 .stack{display:flex;flex-direction:column;gap:12px}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .row>input,.row>select{flex:1 1 140px}
@@ -49,9 +49,6 @@ button:disabled{opacity:.5;cursor:not-allowed}
 
 /* auth */
 .auth{min-height:100vh;display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr)}
-.auth-side{background:var(--side);color:#fff;padding:48px;display:flex;flex-direction:column;justify-content:space-between}
-.auth-side h1{font-size:34px;font-weight:700;letter-spacing:-.02em;max-width:14ch}
-.auth-side p{color:var(--side-ink);max-width:36ch;margin-top:14px}
 .auth-main{display:flex;align-items:center;justify-content:center;padding:24px}
 .auth-card{width:100%;max-width:400px}
 .auth-card h2{margin-bottom:6px}
@@ -61,44 +58,57 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .tab.active{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
 .or{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12.5px}
 .or::before,.or::after{content:'';flex:1;border-top:1px solid var(--line)}
-@media(max-width:820px){.auth{grid-template-columns:1fr}.auth-side{display:none}.auth-main{align-items:flex-start;padding-top:8vh}}
 
 /* app shell */
 .shell{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:100vh}
-.side{background:var(--side);color:var(--side-ink);padding:20px 14px;display:flex;flex-direction:column;justify-content:space-between;position:sticky;top:0;height:100vh}
+.side{background:var(--surface);color:var(--muted);padding:20px 14px;display:flex;flex-direction:column;justify-content:space-between;position:sticky;top:0;height:100vh}
 .brand{display:flex;align-items:center;gap:10px;color:#fff;font-weight:700;padding:0 8px 22px}
 .logo{width:34px;height:34px;border-radius:9px;background:var(--accent);display:grid;place-items:center;flex-shrink:0}
 .nav{display:flex;flex-direction:column;gap:4px}
-.nav-item{background:transparent;color:var(--side-ink);justify-content:flex-start;height:42px;font-weight:500}
+.nav-item{background:transparent;color:var(--muted);justify-content:flex-start;height:42px;font-weight:500}
 .nav-item:hover{background:rgba(255,255,255,.07);color:#fff}
 .nav-item.active{background:rgba(255,255,255,.12);color:#fff}
 .who{border-top:1px solid rgba(255,255,255,.12);padding-top:14px}
 .who b{color:#fff;display:block;margin-bottom:6px}
 .who .badge{background:rgba(255,255,255,.12);color:#fff}
-.who button{width:100%;margin-top:12px;background:transparent;color:var(--side-ink);border-color:rgba(255,255,255,.2)}
+.who button{width:100%;margin-top:12px;background:transparent;color:var(--muted);border-color:rgba(255,255,255,.2)}
 .who button:hover{background:rgba(255,255,255,.08);color:#fff}
 .main{padding:28px 32px 40px;max-width:1360px;width:100%}
 .head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:20px}
 .head p{color:var(--muted);margin-top:4px;font-size:14px}
 .mtop{display:none}
 
-/* POS */
-.pos{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;align-items:start}
-.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;margin:12px 0 14px;scrollbar-width:none}
+/* POS & Smart Category Grid */
+.pos{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:22px;align-items:start}
+.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin:4px 0 18px;scrollbar-width:none}
 .chips::-webkit-scrollbar{display:none}
 .chip{height:38px;background:var(--surface);color:var(--ink);border-color:var(--line);font-weight:500;flex-shrink:0}
 .chip:hover{background:var(--line-2)}
 .chip.active{background:var(--ink);color:#fff;border-color:var(--ink)}
-.dishes{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:10px}
-.dish{display:flex;flex-direction:column;align-items:stretch;justify-content:space-between;gap:10px;height:auto;min-height:104px;padding:14px;text-align:left;white-space:normal;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:12px;font-weight:500}
-.dish:hover{background:var(--accent-soft);border-color:var(--accent)}
-.dish:active{transform:scale(.98)}
-.dish .n{font-weight:600;line-height:1.25}
-.dish .meta{display:flex;justify-content:space-between;align-items:baseline;gap:6px;font-size:13px;color:var(--muted)}
+
+.cat-group{margin-bottom:24px}
+.cat-group:last-child{margin-bottom:0}
+.cat-head{display:flex;align-items:center;gap:10px;margin-bottom:11px;padding-bottom:6px;border-bottom:1px solid var(--line-2)}
+.cat-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.cat-name{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink)}
+.cat-cnt{font-size:11.5px;font-weight:600;color:var(--muted);background:var(--surface-2);border:1px solid var(--line);padding:1px 8px;border-radius:99px}
+
+.dishes{display:grid;grid-template-columns:repeat(auto-fill,minmax(195px,1fr));gap:11px}
+.dish{
+  display:flex;flex-direction:column;align-items:stretch;justify-content:space-between;gap:12px;
+  height:auto;min-height:102px;padding:14px 15px;text-align:left;white-space:normal;
+  background:var(--surface);color:var(--ink);border:1px solid var(--line);border-top-width:3px;
+  border-radius:12px;font-weight:500;
+}
+.dish:hover:not(:disabled){background:var(--surface-2);border-color:var(--accent);transform:translateY(-2px)}
+.dish:active:not(:disabled){transform:scale(.98)}
+.dish .n{font-weight:600;font-size:14.5px;line-height:1.3}
+.dish .meta{display:flex;justify-content:space-between;align-items:baseline;gap:6px;font-size:12.5px;color:var(--muted)}
 .dish .p{font-size:16px;font-weight:700;color:var(--ink)}
-.dish .p s{font-size:12px;color:var(--muted);font-weight:400;margin-left:4px}
+.dish .p s{font-size:12px;color:var(--muted);font-weight:400;margin-left:5px}
 .dish .low{color:var(--bad);font-weight:600}
-.dish:disabled{opacity:.45}
+.dish:disabled{opacity:.42;filter:grayscale(.4)}
+
 .receipt{position:sticky;top:20px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px}
 .receipt-top{display:flex;justify-content:space-between;align-items:center}
 .seg{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -138,7 +148,7 @@ td .acts{display:flex;gap:6px;flex-wrap:wrap}
 /* laptop */
 @media(max-width:1180px){.pos{grid-template-columns:minmax(0,1fr) 300px}.main{padding:24px 22px 40px}}
 
-/* tablet/phone: sidebar becomes bottom tab bar, tables become cards, receipt becomes sheet */
+/* tablet/phone */
 @media(max-width:899px){
   .shell{grid-template-columns:1fr}
   .side{position:fixed;inset:auto 0 0 0;height:calc(var(--nav-h) + env(safe-area-inset-bottom));padding:0 4px env(safe-area-inset-bottom);flex-direction:row;z-index:50;border-top:1px solid rgba(255,255,255,.1)}
@@ -151,14 +161,13 @@ td .acts{display:flex;gap:6px;flex-wrap:wrap}
   .mtop{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
   .mtop .u{display:flex;align-items:center;gap:8px;font-weight:600}
   .pos{grid-template-columns:1fr}
-  .dishes{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}
+  .dishes{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
   .cartbar{position:fixed;left:12px;right:12px;bottom:calc(var(--nav-h) + 10px + env(safe-area-inset-bottom));z-index:40;height:54px;justify-content:space-between;box-shadow:0 8px 20px rgba(0,0,0,.25);border-radius:14px}
   body[data-sec="pos"] .cartbar{display:flex}
   .receipt{position:fixed;left:0;right:0;bottom:calc(var(--nav-h) + env(safe-area-inset-bottom));top:auto;z-index:45;border-radius:18px 18px 0 0;max-height:78vh;overflow:auto;transform:translateY(110%);visibility:hidden;transition:transform .22s,visibility .22s;border-bottom:0}
   .receipt.open{transform:none;visibility:visible}
   .close-sheet{display:inline-flex}
   .two{grid-template-columns:1fr}
-  /* card tables */
   table.rt thead{display:none}
   table.rt,table.rt tbody,table.rt tr,table.rt td{display:block;width:100%}
   table.rt tr{border:1px solid var(--line);border-radius:12px;padding:6px 12px;margin-bottom:10px;background:var(--surface)}
@@ -300,7 +309,7 @@ button.tg{background:#4AA3DB;color:#06121B} button.tg:hover{background:#68B6E6}
       <div class="pos">
         <div>
           <div id="chips" class="chips"></div>
-          <div id="dishes" class="dishes"></div>
+          <div id="dishes"></div>
         </div>
         <div id="receipt" class="receipt">
           <div class="receipt-top"><h3>Новый чек</h3><button class="sec sm close-sheet" onclick="toggleReceipt(false)">Закрыть</button></div>
@@ -425,6 +434,14 @@ let USER = JSON.parse(localStorage.getItem('sv_user') || 'null');
 let MENU_CACHE = [], CART = [], CAT = 'Все';
 let PENDING_2FA = { id: '', mode: 'login', newPass: '' };
 const SECTIONS = ['pos','orders','menu','security','admin','logs'];
+const CAT_COLORS = {
+  'Первые блюда': '#E8B65C',
+  'Вторые блюда': '#F0707A',
+  'Гарниры': '#D9C36A',
+  'Салаты': '#6FD3A0',
+  'Десерты': '#E28AD4',
+  'Напитки': '#6BA8F2'
+};
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money = n => Number(n).toLocaleString('ru-RU') + ' ₸';
@@ -623,7 +640,7 @@ async function changePass() {
   } catch (e) { fail(e); }
 }
 
-/* ---------- Меню, плитки и чек ---------- */
+/* ---------- Меню, умные плитки и чек ---------- */
 async function loadMenu() {
   try { MENU_CACHE = await api('GET', '/api/menu'); } catch (e) { return fail(e); }
   renderDishes(); renderMenu();
@@ -632,14 +649,52 @@ function renderDishes() {
   const cats = ['Все', ...new Set(MENU_CACHE.map(m => m.category))];
   if (!cats.includes(CAT)) CAT = 'Все';
   $('chips').innerHTML = cats.map(c => `<button class="chip ${c === CAT ? 'active' : ''}" data-c="${esc(c)}" onclick="CAT=this.dataset.c;renderDishes()">${esc(c)}</button>`).join('');
-  const q = ($('pos-search').value || '').toLowerCase();
-  const list = MENU_CACHE.filter(m => (CAT === 'Все' || m.category === CAT) && m.name.toLowerCase().includes(q));
-  $('dishes').innerHTML = list.length ? list.map(m => `
-    <button class="dish" ${m.stock < 1 ? 'disabled' : ''} onclick="addToCart(${m.id})">
-      <span class="n">${esc(m.name)}</span>
-      <span class="meta"><span class="p">${finalPrice(m)} ₸${m.discount > 0 ? `<s>${m.price}</s>` : ''}</span>
-      <span class="${m.stock < 5 ? 'low' : ''}">${m.stock < 1 ? 'нет' : 'ост. ' + m.stock}</span></span>
-    </button>`).join('') : '<p class="muted" style="grid-column:1/-1;padding:24px 0">Ничего не найдено. Измените запрос или категорию.</p>';
+
+  const q = ($('pos-search').value || '').trim().toLowerCase();
+  const filtered = MENU_CACHE
+    .filter(m => (CAT === 'Все' || m.category === CAT) && m.name.toLowerCase().includes(q))
+    .sort((a, b) => (b.stock > 0) - (a.stock > 0) || b.discount - a.discount || a.id - b.id);
+
+  if (!filtered.length) {
+    $('dishes').innerHTML = '<p class="muted" style="padding:24px 0">Ничего не найдено. Измените запрос или категорию.</p>';
+    return;
+  }
+
+  const dishCard = m => {
+    const color = CAT_COLORS[m.category] || 'var(--accent)';
+    return `
+      <button class="dish" style="border-top-color:${color}" ${m.stock < 1 ? 'disabled' : ''} onclick="addToCart(${m.id})">
+        <span class="n">${esc(m.name)}</span>
+        <span class="meta">
+          <span class="p">${finalPrice(m)} ₸${m.discount > 0 ? `<s>${m.price}</s>` : ''}</span>
+          <span class="${m.stock < 5 ? 'low' : ''}">${m.stock < 1 ? 'нет' : 'ост. ' + m.stock}</span>
+        </span>
+      </button>`;
+  };
+
+  if (CAT !== 'Все' || q) {
+    $('dishes').innerHTML = `<div class="dishes">${filtered.map(dishCard).join('')}</div>`;
+    return;
+  }
+
+  const groups = new Map();
+  filtered.forEach(m => {
+    if (!groups.has(m.category)) groups.set(m.category, []);
+    groups.get(m.category).push(m);
+  });
+
+  $('dishes').innerHTML = Array.from(groups.entries()).map(([cat, list]) => {
+    const color = CAT_COLORS[cat] || 'var(--accent)';
+    return `
+      <div class="cat-group">
+        <div class="cat-head">
+          <span class="cat-dot" style="background:${color}"></span>
+          <span class="cat-name">${esc(cat)}</span>
+          <span class="cat-cnt">${list.length}</span>
+        </div>
+        <div class="dishes">${list.map(dishCard).join('')}</div>
+      </div>`;
+  }).join('');
 }
 function addToCart(id) {
   const dish = MENU_CACHE.find(m => m.id === id); if (!dish) return;
