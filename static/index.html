@@ -378,7 +378,7 @@ input,select{background:var(--surface-2)}
 
     <!-- Журнал -->
     <section id="sec-logs" class="hidden">
-      <div class="head"><div><h2>Журнал аудита</h2><p>Входы, операции кассы, смена ролей, нарушения целостности</p></div></div>
+      <div class="head"><div><h2>Журнал аудита</h2><p>История за всё время в БД, зашифрованный бэкап и восстановление</p></div></div>
       <div class="panel">
         <div class="row" style="margin-bottom:14px">
           <input id="log-s" placeholder="С: 08:00:00 или 2026-11-23" style="flex:1 1 170px">
@@ -391,6 +391,8 @@ input,select{background:var(--surface-2)}
           <button class="sec sm" onclick="presetTime('08:00:00','12:00:00')">Утро</button>
           <button class="sec sm" onclick="presetTime('14:00:00','17:00:00')">День</button>
           <button class="sec sm" onclick="presetTime('18:00:00','23:00:00')">Вечер</button>
+          <button class="sec sm" onclick="downloadFile('/api/admin/backup/logs/json','SecureVault_Logs_Encrypted.json')">Бэкап логов (JSON)</button>
+          <label class="sec sm" style="height:36px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;font-weight:600;background:var(--surface-2)">Восстановить логи<input type="file" accept=".json" style="display:none" onchange="restoreLogsBackup(this)"></label>
         </div>
         <div id="log-box" class="log"></div>
       </div>
@@ -817,6 +819,15 @@ async function restoreBackup(input) {
     await api('POST', '/api/admin/restore/json', JSON.parse(await file.text()));
     toast('База восстановлена, подпись HMAC-SHA256 верна');
     loadMenu(); loadOrders(); loadUsers(); loadLogs();
+  } catch (e) { fail(e); }
+  input.value = '';
+}
+async function restoreLogsBackup(input) {
+  const file = input.files[0]; if (!file) return;
+  try {
+    const res = await api('POST', '/api/admin/restore/logs/json', JSON.parse(await file.text()));
+    toast(`Восстановлено записей логов: ${res.restored}`);
+    loadLogs();
   } catch (e) { fail(e); }
   input.value = '';
 }
