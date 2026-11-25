@@ -128,6 +128,9 @@ class PostgresDB:
     def enc(self, text: str) -> str:
         return self._fernet.encrypt(text.encode()).decode()
 
+    def dec(self, token_text: str) -> str:
+        return self._fernet.decrypt(token_text.encode()).decode()
+
     def chat_id(self, tg_enc: str):
         if not tg_enc:
             return None
@@ -137,7 +140,33 @@ class PostgresDB:
             return None
 
 
+class DBAuditHandler(logging.Handler):
+    def __init__(self, database: PostgresDB):
+        super().__init__()
+        self._db = database
+        self._writing = False
+
+    def emit(self, record: logging.LogRecord):
+        if self._writing or record.name.startswith("uvicorn"):
+            return
+        try:
+            self._writing = True
+            msg = record.getMessage()
+            cat_match = re.match(r"^\[([^\]]+)\]\s*", msg)
+            category = cat_match.group(1) if cat_match else "АУДИТ"
+            ts = datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S")
+            self._db.execute(
+                "INSERT INTO audit_logs (created_at, level, actor, category, message) VALUES (%s, %s, %s, %s, %s)",
+                (ts, record.levelname.ljust(7), "system", category[:64], msg),
+            )
+        except Exception:
+            pass
+        finally:
+            self._writing = False
+
+
 db = PostgresDB(DATABASE_URL)
+logger.addHandler(DBAuditHandler(db))
 
 sessions: dict[str, dict] = {}
 challenges: dict[str, dict] = {}
@@ -844,10 +873,19 @@ def make_invite(u=Depends(require_admin)):
 
 @app.get("/api/admin/logs")
 def get_logs(start_time: Optional[str] = None, end_time: Optional[str] = None, u=Depends(require_admin)):
-    if not os.path.exists(LOG_FILE):
-        return {"logs": []}
-    with open(LOG_FILE, "r", encoding="utf-8", errors="ignore") as f:
-        lines = [line.strip() for line in f if line.strip()]
+    rows = db.execute(
+        "SELECT created_at, level, message FROM audit_logs ORDER BY id ASC",
+        (),
+        "all",
+    )
+    lines = []
+    for r in rows:
+        dt_str = (
+            r["created_at"].strftime("%Y-%m-%d %H:%M:%S")
+            if hasattr(r["created_at"], "strftime")
+            else str(r["created_at"])[:19]
+        )
+        lines.append(f"{dt_str} | {r['level']} | {r['message']}")
 
     s_raw = start_time.strip() if start_time else ""
     e_raw = end_time.strip() if end_time else ""
@@ -867,6 +905,67 @@ def get_logs(start_time: Optional[str] = None, end_time: Optional[str] = None, u
             elif ":" in e_raw and " " not in e_raw and log_time > (e_raw if e_raw.count(":") == 2 else f"{e_raw}:59"): continue
         filtered.append(line)
     return {"logs": filtered[-1000:]}
+
+
+@app.get("/api/admin/backup/logs/json")
+def export_logs_json(u=Depends(require_admin)):
+    rows = db.execute(
+        "SELECT created_at::text, level, actor, category, message FROM audit_logs ORDER BY id ASC",
+        (),
+        "all",
+    )
+    payload = {
+        "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "count": len(rows),
+        "logs": rows,
+    }
+    encrypted_blob = db.enc(json.dumps(payload, ensure_ascii=False))
+    envelope = {
+        "version": 1,
+        "format": "encrypted_audit_logs_json",
+        "cipher": "Fernet-AES128-CBC+HMAC-SHA256",
+        "exported_at": payload["exported_at"],
+        "encrypted_data": encrypted_blob,
+    }
+    logger.info(f"[БЭКАП ЛОГОВ] Админ '{u['name']}' выгрузил зашифрованный JSON-бэкап логов ({len(rows)} записей)")
+    raw = json.dumps(envelope, ensure_ascii=False, indent=2).encode("utf-8")
+    return StreamingResponse(
+        io.BytesIO(raw),
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=SecureVault_Logs_Encrypted.json"},
+    )
+
+
+@app.post("/api/admin/restore/logs/json")
+async def restore_logs_json(request: Request, u=Depends(require_admin)):
+    body = await request.json()
+    enc_blob = body.get("encrypted_data", "")
+    if not enc_blob:
+        raise HTTPException(400, "В файле отсутствует зашифрованный блок encrypted_data.")
+    try:
+        decrypted_text = db.dec(enc_blob)
+        payload = json.loads(decrypted_text)
+        entries = payload.get("logs")
+        if not isinstance(entries, list):
+            raise ValueError("Некорректная структура логов.")
+    except Exception:
+        logger.error(f"[ЦЕЛОСТНОСТЬ ЛОГОВ] Админ '{u['name']}' попытался загрузить повреждённый или чужой зашифрованный бэкап логов")
+        raise HTTPException(400, "Не удалось расшифровать бэкап логов: неверный ключ или файл повреждён.")
+
+    db.execute("DELETE FROM audit_logs")
+    for item in entries:
+        db.execute(
+            "INSERT INTO audit_logs (created_at, level, actor, category, message) VALUES (%s, %s, %s, %s, %s)",
+            (
+                item.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                (item.get("level") or "INFO")[:16],
+                (item.get("actor") or "system")[:64],
+                (item.get("category") or "АУДИТ")[:64],
+                item.get("message") or "",
+            ),
+        )
+    logger.warning(f"[ВОССТАНОВЛЕНИЕ ЛОГОВ] Админ '{u['name']}' восстановил {len(entries)} записей логов из зашифрованного JSON")
+    return {"status": "ok", "restored": len(entries)}
 
 
 @app.get("/api/admin/backup/json")
