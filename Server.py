@@ -101,8 +101,18 @@ def verify_secret(secret: str, stored: str) -> bool:
 
 DUMMY_HASH = hash_secret("dummy-password")
 
+def _canonicalize_numbers(obj):
+    if isinstance(obj, float):
+        return int(obj) if obj.is_integer() else round(obj, 6)
+    if isinstance(obj, dict):
+        return {k: _canonicalize_numbers(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_canonicalize_numbers(v) for v in obj]
+    return obj
+
 def compute_integrity_hmac(payload_dict: dict) -> str:
-    canonical = json.dumps(payload_dict, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    normalized = _canonicalize_numbers(payload_dict)
+    canonical = json.dumps(normalized, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return hmac.new(MASTER_KEY.encode("utf-8"), canonical, hashlib.sha256).hexdigest()
 
 def norm_code(code: str) -> str:
@@ -1160,8 +1170,9 @@ async def restore_logs_json(request: Request, u=Depends(require_admin)):
     return {"status": "ok", "restored": len(entries)}
 
 
+@app.get("/api/admin/backup/bak")
 @app.get("/api/admin/backup/json")
-def export_json(u=Depends(require_admin)):
+def export_bak(u=Depends(require_admin)):
     users = db.execute("SELECT * FROM users", (), "all")
     clean_users = [
         {
@@ -1187,7 +1198,7 @@ def export_json(u=Depends(require_admin)):
     stock_movements = db.execute("SELECT id, menu_item_id, delta, reason, actor, created_at::text FROM stock_movements ORDER BY id", (), "all")
     invite_codes = db.execute("SELECT id, code_hash, role, created_by, expires_at::text, used_by, used_at::text FROM invite_codes ORDER BY id", (), "all")
 
-    data_block = {
+    data_block = _canonicalize_numbers({
         "users": clean_users,
         "categories": categories,
         "dining_tables": dining_tables,
@@ -1197,22 +1208,30 @@ def export_json(u=Depends(require_admin)):
         "order_status_history": order_status_history,
         "stock_movements": stock_movements,
         "invite_codes": invite_codes,
-    }
+    })
     snapshot = {
         "version": 5,
+        "format": "gurmanpos_db_bak",
         "engine": "PostgreSQL (Supabase)",
         "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "integrity_hmac_sha256": compute_integrity_hmac(data_block),
         "data": data_block
     }
-    logger.info(f"[БЭКАП] Админ '{u['name']}' выгрузил подписанный JSON-снимок БД")
+    logger.info(f"[БЭКАП] Админ '{u['name']}' выгрузил подписанный дамп БД (.bak)")
     raw = json.dumps(snapshot, ensure_ascii=False, indent=2).encode("utf-8")
-    return StreamingResponse(io.BytesIO(raw), media_type="application/json",
-                             headers={"Content-Disposition": "attachment; filename=GurmanPOS_SignedBackup.json"})
+    return StreamingResponse(io.BytesIO(raw), media_type="application/octet-stream",
+                             headers={"Content-Disposition": "attachment; filename=GurmanPOS_Backup.bak"})
 
+
+@app.post("/api/admin/restore/bak")
 @app.post("/api/admin/restore/json")
-async def restore_json(request: Request, u=Depends(require_admin)):
-    snapshot = await request.json()
+async def restore_bak(request: Request, u=Depends(require_admin)):
+    raw_bytes = await request.body()
+    try:
+        snapshot = json.loads(raw_bytes.decode("utf-8"))
+    except Exception:
+        raise HTTPException(400, "Файл .bak повреждён или имеет неверный формат.")
+
     data_block = snapshot.get("data")
     sig = snapshot.get("integrity_hmac_sha256", "")
     if not data_block or not sig:
@@ -1281,9 +1300,13 @@ async def restore_json(request: Request, u=Depends(require_admin)):
             (ic["id"], ic["code_hash"], ic["role"], ic.get("created_by"), ic.get("expires_at"), ic.get("used_by"), ic.get("used_at"))
         )
 
+    for tbl in ("categories", "dining_tables", "menu", "orders", "order_items", "order_status_history", "stock_movements", "invite_codes"):
+        db.execute(f"SELECT setval(pg_get_serial_sequence('public.{tbl}', 'id'), COALESCE((SELECT MAX(id) FROM public.{tbl}), 1), true)")
+
     seed_reference_tables()
-    logger.warning(f"[ВОССТАНОВЛЕНИЕ] БД успешно восстановлена из проверенного бэкапа ({u['name']})")
+    logger.warning(f"[ВОССТАНОВЛЕНИЕ] БД успешно восстановлена из .bak ({u['name']})")
     return {"status": "ok"}
+
 
 @app.get("/api/admin/backup/excel")
 def export_excel(u=Depends(require_admin)):
