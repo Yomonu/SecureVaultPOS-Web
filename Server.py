@@ -1,902 +1,1134 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0A0912">
-<title>Гурман POS</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=Unbounded:wght@500;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-<style>
-:root{
-  --bg:#0A0912; --surface:#12111C; --surface-2:#1A1827; --ink:#EDEAF7; --muted:#8F8BA6; --line:#2A2740; --line-2:#1D1A2E;
-  --accent:#B9A4F5; --accent-d:#CDBDF8; --accent-soft:rgba(185,164,245,.13);
-  --ok:#6FD3A0; --ok-soft:rgba(111,211,160,.14); --warn:#E8B65C; --warn-soft:rgba(232,182,92,.14);
-  --bad:#F0707A; --bad-soft:rgba(240,112,122,.14); --nav-h:64px;
-}
-*{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 'Golos Text',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;min-height:100vh;font-variant-numeric:tabular-nums}
-h1,h2,h3{margin:0;line-height:1.2}
-h2{font-size:22px;font-weight:700;letter-spacing:-.01em}
-h3{font-size:16px;font-weight:600}
-p{margin:0}
-.muted{color:var(--muted)} .small{font-size:13px} .hidden{display:none!important}
+import base64
+import hashlib
+import hmac
+import io
+import json
+import logging
+import os
+import re
+import secrets
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime
+from typing import Literal, Optional
 
-/* controls */
-input,select{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:0 12px;height:44px;width:100%;min-width:0;outline:none}
-input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(185,164,245,.18)}
-button{font:inherit;font-weight:600;border:1px solid transparent;border-radius:10px;height:44px;padding:0 16px;cursor:pointer;background:var(--accent);color:#14101F;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:background .15s,transform .12s,border-color .15s;white-space:nowrap}
-button:hover{background:var(--accent-d)}
-button:focus-visible,a:focus-visible,.dish:focus-visible{outline:3px solid rgba(185,164,245,.45);outline-offset:2px}
-button.sec{background:var(--surface-2);color:var(--ink);border-color:var(--line)} button.sec:hover{background:#242137}
-button.ok{background:var(--ok);color:#07140D} button.ok:hover{background:#8BE0B4}
-button.danger{background:var(--bad-soft);color:var(--bad);border-color:rgba(240,112,122,.3)} button.danger:hover{background:rgba(240,112,122,.24)}
-button.sm{height:36px;padding:0 12px;font-size:13px;border-radius:8px}
-button.tg{background:#4AA3DB;color:#06121B} button.tg:hover{background:#68B6E6}
-button.google{background:var(--surface-2);color:var(--ink);border-color:var(--line)} button.google:hover{background:#242137}
-button:disabled{opacity:.45;cursor:not-allowed}
-.stack{display:flex;flex-direction:column;gap:12px}
-.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.row>input,.row>select{flex:1 1 140px}
-.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px}
-.panel+.panel{margin-top:16px}
-.badge{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:99px;font-size:12.5px;font-weight:600;background:var(--line-2);color:var(--muted)}
-.b-ok{background:var(--ok-soft);color:var(--ok)} .b-warn{background:var(--warn-soft);color:var(--warn)}
-.b-bad{background:var(--bad-soft);color:var(--bad)} .b-acc{background:var(--accent-soft);color:var(--accent)}
+import pandas as pd
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import uvicorn
+from cryptography.fernet import Fernet
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
-/* auth */
-.auth{min-height:100vh;display:flex;align-items:center;justify-content:center}
-.auth-main{flex:1;display:flex;align-items:center;justify-content:center;padding:24px}
-.auth-card{width:100%;max-width:400px;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:28px}
-.auth-card h2{margin-bottom:6px;font-size:17px}
-.auth-brand{display:flex;align-items:center;gap:10px;color:var(--ink);margin-bottom:26px;font-size:12px;font-weight:500;letter-spacing:.14em;text-transform:uppercase}
-.tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;background:#0D0C16;padding:4px;border-radius:12px;margin:20px 0}
-.tab{background:transparent;color:var(--muted);height:38px;padding:0 6px;font-size:13.5px}
-.tab:hover{background:transparent;color:var(--ink)}
-.tab.active{background:var(--surface-2);color:var(--ink)}
-.or{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12.5px}
-.or::before,.or::after{content:'';flex:1;border-top:1px solid var(--line)}
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_FILE = os.path.join(BASE_DIR, "server.log")
+ENV_FILE = os.path.join(BASE_DIR, ".env")
+STATIC_DIR = os.path.join(BASE_DIR, "static")
 
-/* app shell */
-.shell{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:100vh}
-.side{background:var(--surface);color:var(--muted);padding:20px 14px;display:flex;flex-direction:column;justify-content:space-between;position:sticky;top:0;height:100vh;border-right:1px solid var(--line)}
-.brand{display:flex;align-items:center;gap:10px;color:var(--ink);font-weight:500;padding:0 8px 22px;font-size:12px;letter-spacing:.14em;text-transform:uppercase}
-.logo{width:34px;height:34px;border-radius:9px;background:var(--accent);display:grid;place-items:center;flex-shrink:0}
-.logo svg{stroke:#14101F}
-.nav{display:flex;flex-direction:column;gap:4px}
-.nav-item{background:transparent;color:var(--muted);justify-content:flex-start;height:42px;font-weight:500}
-.nav-item:hover{background:var(--surface-2);color:var(--ink)}
-.nav-item.active{background:var(--accent-soft);color:var(--accent)}
-.who{border-top:1px solid var(--line);padding-top:14px}
-.who b{color:var(--ink);display:block;margin-bottom:6px}
-.who .badge{background:var(--surface-2);color:var(--ink)}
-.who button{width:100%;margin-top:12px;background:transparent;color:var(--muted);border-color:var(--line)}
-.who button:hover{background:var(--surface-2);color:var(--ink)}
-.main{padding:28px 32px 40px;max-width:1360px;width:100%}
-.head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:20px}
-.head p{color:var(--muted);margin-top:4px;font-size:14px}
-.mtop{display:none}
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-7s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[logging.FileHandler(LOG_FILE, encoding="utf-8"), logging.StreamHandler()]
+)
+logger = logging.getLogger("POS")
+logging.getLogger("uvicorn.access").handlers = []
+logging.getLogger("uvicorn.access").propagate = False
 
-/* POS & Smart Category Grid */
-.pos{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:22px;align-items:start}
-.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin:4px 0 18px;scrollbar-width:none}
-.chips::-webkit-scrollbar{display:none}
-.chip{height:38px;background:var(--surface);color:var(--ink);border-color:var(--line);font-weight:500;flex-shrink:0}
-.chip:hover{background:var(--line-2)}
-.chip.active{background:var(--accent);color:#14101F;border-color:var(--accent)}
+load_dotenv(ENV_FILE, override=True)
 
-.cat-group{margin-bottom:24px}
-.cat-group:last-child{margin-bottom:0}
-.cat-head{display:flex;align-items:center;gap:10px;margin-bottom:11px;padding-bottom:6px;border-bottom:1px solid var(--line-2)}
-.cat-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.cat-name{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink)}
-.cat-cnt{font-size:11.5px;font-weight:600;color:var(--muted);background:var(--surface-2);border:1px solid var(--line);padding:1px 8px;border-radius:99px}
+APP_NAME = "Гурман POS System"
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+MASTER_KEY = os.environ.get("SERVER_MASTER_KEY", "").strip() or Fernet.generate_key().decode()
 
-.dishes{display:grid;grid-template-columns:repeat(auto-fill,minmax(195px,1fr));gap:11px}
-.dish{
-  display:flex;flex-direction:column;align-items:stretch;justify-content:space-between;gap:12px;
-  height:auto;min-height:102px;padding:14px 15px;text-align:left;white-space:normal;
-  background:var(--surface);color:var(--ink);border:1px solid var(--line);border-top-width:3px;
-  border-radius:12px;font-weight:500;
-}
-.dish:hover:not(:disabled){background:var(--surface-2);border-color:var(--accent);transform:translateY(-2px)}
-.dish:active:not(:disabled){transform:scale(.98)}
-.dish .n{font-weight:600;font-size:14.5px;line-height:1.3}
-.dish .meta{display:flex;justify-content:space-between;align-items:baseline;gap:6px;font-size:12.5px;color:var(--muted)}
-.dish .p{font-size:16px;font-weight:700;color:var(--ink)}
-.dish .p s{font-size:12px;color:var(--muted);font-weight:400;margin-left:5px}
-.dish .low{color:var(--bad);font-weight:600}
-.dish:disabled{opacity:.42;filter:grayscale(.4)}
+MAX_ATTEMPTS = 5
+LOCK_SECONDS = 60
+CODE_TTL = 300
+CODE_TRIES = 3
+LINK_TTL = 600
+SESSION_TTL = 8 * 3600
+INVITE_TTL = 24 * 3600
+MIN_PASSWORD = 8
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,32}$")
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
-.receipt{position:sticky;top:20px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px}
-.receipt-top{display:flex;justify-content:space-between;align-items:center}
-.seg{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.lines{border-top:1px dashed var(--line);border-bottom:1px dashed var(--line);padding:10px 0;min-height:84px;max-height:38vh;overflow:auto}
-.line{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;padding:7px 0}
-.line .ln{font-weight:500;line-height:1.25}
-.line .sum{font-weight:600;text-align:right}
-.qty{display:inline-flex;align-items:center;gap:2px}
-.qty button{height:30px;width:30px;padding:0;border-radius:8px;background:var(--line-2);color:var(--ink);border:0;font-size:16px}
-.qty button:hover{background:var(--line)}
-.qty span{min-width:26px;text-align:center;font-weight:600}
-.total{display:flex;justify-content:space-between;align-items:baseline;font-weight:700}
-.total b{font-size:26px;letter-spacing:-.01em}
-.cartbar{display:none}
-.close-sheet{display:none}
 
-/* tables */
-.tbl{overflow-x:auto}
-table{width:100%;border-collapse:collapse;font-size:14px}
-th{text-align:left;color:var(--muted);font-weight:500;font-size:13px;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
-td{padding:12px;border-bottom:1px solid var(--line-2);vertical-align:middle}
-tr:last-child td{border-bottom:0}
-td .acts{display:flex;gap:6px;flex-wrap:wrap}
-td select.st-sel{height:36px;padding:0 10px;font-size:13px;border-radius:8px;width:auto;min-width:132px;background:var(--surface-2)}
-.log{background:#07060D;color:#C9D6D8;font:12.5px/1.6 ui-monospace,'JetBrains Mono',Consolas,monospace;padding:16px;height:55vh;min-height:260px;overflow:auto;border-radius:10px;white-space:pre}
-.qr{background:#fff;padding:12px;border-radius:12px;display:inline-block;margin:12px 0;border:1px solid var(--line)}
-.two{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:20px;align-items:start}
-.two>.panel{margin:0!important}
-.two>.stack>.panel{margin:0}
+def b64e(data: bytes) -> str:
+    return base64.b64encode(data).decode()
 
-/* modal + toast */
-.modal-bg{position:fixed;inset:0;background:rgba(5,4,10,.78);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px}
-.modal{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:26px;width:100%;max-width:380px;text-align:center}
-.toast{position:fixed;left:50%;bottom:calc(var(--nav-h) + 76px);transform:translateX(-50%);background:#2A2740;color:var(--ink);padding:12px 18px;border-radius:10px;font-size:14px;z-index:200;max-width:calc(100vw - 32px);box-shadow:0 8px 24px rgba(0,0,0,.25)}
-.toast.err{background:#4A2127;color:#FFD5D8}
-@media(min-width:900px){.toast{bottom:28px}}
+def b64d(text: str) -> bytes:
+    return base64.b64decode(text.encode())
 
-/* laptop */
-@media(max-width:1180px){.pos{grid-template-columns:minmax(0,1fr) 300px}.main{padding:24px 22px 40px}}
+def hash_secret(secret: str, salt: bytes | None = None) -> str:
+    salt = salt or os.urandom(16)
+    h = hashlib.scrypt(secret.encode("utf-8"), salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
+    return f"scrypt${b64e(salt)}${b64e(h)}"
 
-/* tablet/phone */
-@media(max-width:899px){
-  .shell{grid-template-columns:1fr}
-  .side{position:fixed;inset:auto 0 0 0;height:calc(var(--nav-h) + env(safe-area-inset-bottom));padding:0 4px env(safe-area-inset-bottom);flex-direction:row;z-index:50;border-right:0;border-top:1px solid var(--line)}
-  .side .brand,.side .who{display:none}
-  .nav{flex-direction:row;width:100%;overflow-x:auto;gap:2px;scrollbar-width:none}
-  .nav-item{flex:1 0 64px;height:var(--nav-h);flex-direction:column;justify-content:center;gap:0;font-size:12px;padding:0 6px;border-radius:0}
-  .nav-item.active{background:transparent;color:var(--accent);box-shadow:inset 0 3px 0 var(--accent)}
-  .main{padding:16px 14px calc(var(--nav-h) + 90px)}
-  h2{font-size:15px}
-  .mtop{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
-  .mtop .u{display:flex;align-items:center;gap:8px;font-weight:600}
-  .pos{grid-template-columns:1fr}
-  .dishes{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
-  .cartbar{position:fixed;left:12px;right:12px;bottom:calc(var(--nav-h) + 10px + env(safe-area-inset-bottom));z-index:40;height:54px;justify-content:space-between;box-shadow:0 8px 20px rgba(0,0,0,.25);border-radius:14px}
-  body[data-sec="pos"] .cartbar{display:flex}
-  .receipt{position:fixed;left:0;right:0;bottom:calc(var(--nav-h) + env(safe-area-inset-bottom));top:auto;z-index:45;border-radius:18px 18px 0 0;max-height:78vh;overflow:auto;transform:translateY(110%);visibility:hidden;transition:transform .22s,visibility .22s;border-bottom:0}
-  .receipt.open{transform:none;visibility:visible}
-  .close-sheet{display:inline-flex}
-  .two{grid-template-columns:1fr}
-  table.rt thead{display:none}
-  table.rt,table.rt tbody,table.rt tr,table.rt td{display:block;width:100%}
-  table.rt tr{border:1px solid var(--line);border-radius:12px;padding:6px 12px;margin-bottom:10px;background:var(--surface)}
-  table.rt td{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line-2);text-align:right}
-  table.rt td:last-child{border-bottom:0}
-  table.rt td::before{content:attr(data-l);color:var(--muted);font-size:13px;text-align:left;flex-shrink:0}
-  table.rt td.full{display:block;text-align:left}
-  table.rt td.full::before{display:none}
-  .tbl{overflow:visible}
-  .panel.flat{padding:0;background:transparent;border:0}
-  .auth-main{align-items:center;padding-top:20px}
-  .auth-card{padding:22px}
-}
-@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+def verify_secret(secret: str, stored: str) -> bool:
+    try:
+        _, s, h = stored.split("$")
+        cand = hashlib.scrypt(secret.encode("utf-8"), salt=b64d(s), n=2 ** 14, r=8, p=1, dklen=32)
+        return hmac.compare_digest(cand, b64d(h))
+    except Exception:
+        return False
 
-:root{color-scheme:dark}
-body{background:radial-gradient(70% 45% at 50% -8%,rgba(150,120,235,.17),transparent 70%),var(--bg);background-attachment:fixed}
-h1,h2,.brand,.auth-brand{font-family:'Unbounded','Golos Text',sans-serif}
-h2{font-size:19px;font-weight:600;text-transform:uppercase;letter-spacing:.02em;line-height:1.25}
-::placeholder{color:var(--muted);opacity:1}
-input,select{background:var(--surface-2)}
-</style>
-</head>
-<body>
+DUMMY_HASH = hash_secret("dummy-password")
 
-<!-- ============ ВХОД ============ -->
-<div id="auth-view" class="auth">
-  <div class="auth-main">
-    <div class="auth-card">
-      <div class="auth-brand"><span class="logo"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2.5c0 1.2 1 1.5 1 2.5"/><path d="M14 2c0 1.3 1 1.7 1 2.8"/><path d="M3 10h14v4.5a4.5 4.5 0 0 1-4.5 4.5h-5A4.5 4.5 0 0 1 3 14.5V10z"/><path d="M17 11.5h2.5a1.5 1.5 0 0 1 0 3H17"/><path d="M7.5 10 19.5 6.5"/></svg></span>Гурман POS</div>
-      <h2>Вход для сотрудников</h2>
-      <p class="muted small">Используйте логин, выданный администратором.</p>
-      <div class="tabs">
-        <button id="atab-login" class="tab active" onclick="setAuthMode('login',this)">Вход</button>
-        <button id="atab-register" class="tab" onclick="setAuthMode('register',this)">Регистрация</button>
-        <button id="atab-reset" class="tab" onclick="setAuthMode('reset',this)">Пароль</button>
-      </div>
+def compute_integrity_hmac(payload_dict: dict) -> str:
+    canonical = json.dumps(payload_dict, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hmac.new(MASTER_KEY.encode("utf-8"), canonical, hashlib.sha256).hexdigest()
 
-      <form id="form-login" class="stack" autocomplete="off" onsubmit="event.preventDefault();doLogin();">
-        <input id="l-user" placeholder="Логин" autocomplete="username">
-        <input id="l-pass" type="password" placeholder="Пароль" autocomplete="current-password">
-        <button type="submit">Войти</button>
-        <div class="or">или</div>
-        <button type="button" class="tg" onclick="doTgLoginRequest()">Код из Telegram</button>
-        <button type="button" class="google" onclick="startGoogleOAuth('login')">Войти через Google</button>
-      </form>
+def norm_code(code: str) -> str:
+    return code.strip().upper().replace("-", "")
 
-      <form id="form-register" class="stack hidden" autocomplete="off" onsubmit="event.preventDefault();doRegister();">
-        <input id="r-user" placeholder="Логин (латиница, 3–32 символа)" autocomplete="off">
-        <input id="r-pass" type="password" placeholder="Пароль (от 8 символов)" autocomplete="new-password">
-        <input id="r-invite" placeholder="Код приглашения" autocomplete="off">
-        <button type="submit" class="ok">Создать учётную запись</button>
-        <div class="or">или</div>
-        <button type="button" class="google" onclick="onGoogleRegisterClick()">Зарегистрироваться через Google</button>
-      </form>
+def new_recovery_code() -> str:
+    return "-".join(secrets.token_hex(2).upper() for _ in range(3))
 
-      <form id="form-reset" class="stack hidden" autocomplete="off" onsubmit="event.preventDefault();doResetRecovery();">
-        <input id="rst-user" placeholder="Логин" autocomplete="username">
-        <input id="rst-newpass" type="password" placeholder="Новый пароль (от 8 символов)" autocomplete="new-password">
-        <input id="rst-code" placeholder="Резервный код XXXX-XXXX-XXXX" autocomplete="off">
-        <button type="submit">Сбросить по резервному коду</button>
-        <div class="or">или</div>
-        <button type="button" class="sec" onclick="doResetTgRequest()">Получить код в Telegram</button>
-      </form>
-    </div>
-  </div>
-</div>
+def normalize(username: str) -> str:
+    return username.strip().lower()
 
-<!-- ============ МОДАЛКА ЛОГИНА И ПАРОЛЯ ПРИ РЕГИСТРАЦИИ ЧЕРЕЗ GOOGLE ============ -->
-<div id="modal-google-creds" class="modal-bg hidden">
-  <div class="modal" style="text-align:left">
-    <h3 style="margin-bottom:6px;text-align:center">Введите логин</h3>
-    <p class="muted small" style="margin-bottom:16px;text-align:center">Укажите логин для входа и при желании пароль (от 8 символов).</p>
-    <div class="stack" style="margin-bottom:16px">
-      <input id="g-reg-user" placeholder="Логин (латиница, 3–32 символа)" autocomplete="off" onkeydown="if(event.key==='Enter')submitGoogleCreds()">
-      <input id="g-reg-pass" type="password" placeholder="Пароль (необязательно, от 8 символов)" autocomplete="new-password" onkeydown="if(event.key==='Enter')submitGoogleCreds()">
-    </div>
-    <div class="row">
-      <button class="ok" style="flex:1" onclick="submitGoogleCreds()">Продолжить</button>
-      <button class="sec" onclick="closeModal('modal-google-creds')">Отмена</button>
-    </div>
-  </div>
-</div>
+def unit_price(price: float, discount: int) -> float:
+    return round(float(price) * (1 - int(discount) / 100), 2)
 
-<!-- ============ 2FA ============ -->
-<div id="modal-2fa" class="modal-bg hidden">
-  <div class="modal">
-    <h3 id="m2fa-title" style="margin-bottom:6px">Подтверждение через Telegram</h3>
-    <p class="muted small" id="m2fa-desc" style="margin-bottom:16px">Введите 6-значный код из Telegram.</p>
-    <input id="m2fa-code" maxlength="6" inputmode="numeric" placeholder="000000" autocomplete="one-time-code" onkeydown="if(event.key==='Enter')submit2FA()" style="text-align:center;font-size:24px;letter-spacing:8px;height:56px;margin-bottom:14px">
-    <div class="row"><button class="ok" style="flex:1" onclick="submit2FA()">Подтвердить</button><button class="sec" onclick="closeModal('modal-2fa')">Отмена</button></div>
-  </div>
-</div>
 
-<!-- ============ ПРИЛОЖЕНИЕ ============ -->
-<div id="app-view" class="shell hidden">
-  <aside class="side">
-    <div>
-      <div class="brand"><div class="logo"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2.5c0 1.2 1 1.5 1 2.5"/><path d="M14 2c0 1.3 1 1.7 1 2.8"/><path d="M3 10h14v4.5a4.5 4.5 0 0 1-4.5 4.5h-5A4.5 4.5 0 0 1 3 14.5V10z"/><path d="M17 11.5h2.5a1.5 1.5 0 0 1 0 3H17"/><path d="M7.5 10 19.5 6.5"/></svg></div>Гурман POS</div>
-      <nav class="nav">
-        <button class="nav-item active" data-nav="pos" onclick="nav('pos')">Касса</button>
-        <button class="nav-item" data-nav="orders" onclick="nav('orders')">Заказы</button>
-        <button class="nav-item" data-nav="menu" onclick="nav('menu')">Меню</button>
-        <button class="nav-item" data-nav="security" onclick="nav('security')">Профиль</button>
-        <button id="nav-admin" class="nav-item hidden" data-nav="admin" onclick="nav('admin')">Персонал</button>
-        <button id="nav-logs" class="nav-item hidden" data-nav="logs" onclick="nav('logs')">Журнал</button>
-      </nav>
-    </div>
-    <div class="who">
-      <b id="sb-user">user</b><span id="sb-role" class="badge">ROLE</span>
-      <button onclick="doLogout()">Выйти</button>
-    </div>
-  </aside>
+class PostgresDB:
+    def __init__(self, dsn: str):
+        if not dsn:
+            raise RuntimeError("Не задан DATABASE_URL в переменных окружения.")
+        self.dsn = dsn
+        self.lock = threading.RLock()
+        self._fernet = Fernet(MASTER_KEY.encode())
+        self.conn = psycopg2.connect(self.dsn, cursor_factory=RealDictCursor)
+        self.conn.autocommit = True
 
-  <main class="main">
-    <div class="mtop"><div class="u"><span id="mb-user">user</span><span id="mb-role" class="badge b-acc">ROLE</span></div><button class="sec sm" onclick="doLogout()">Выйти</button></div>
+    def execute(self, query: str, params: tuple = (), fetch: str = "none"):
+        with self.lock:
+            if self.conn.closed:
+                self.conn = psycopg2.connect(self.dsn, cursor_factory=RealDictCursor)
+                self.conn.autocommit = True
+            with self.conn.cursor() as cur:
+                cur.execute(query, params)
+                if fetch == "one":
+                    row = cur.fetchone()
+                    return dict(row) if row else None
+                if fetch == "all":
+                    return [dict(r) for r in cur.fetchall()]
+                return None
 
-    <!-- Касса -->
-    <section id="sec-pos">
-      <div class="head"><div><h2>Касса</h2><p>Нажмите на блюдо, чтобы добавить его в чек</p></div>
-        <input id="pos-search" placeholder="Найти блюдо" oninput="renderDishes()" style="max-width:260px"></div>
-      <div class="pos">
-        <div>
-          <div id="chips" class="chips"></div>
-          <div id="dishes"></div>
-        </div>
-        <div id="receipt" class="receipt">
-          <div class="receipt-top"><h3>Новый чек</h3><button class="sec sm close-sheet" onclick="toggleReceipt(false)">Закрыть</button></div>
-          <input id="ord-table" value="Стол №1" aria-label="Стол">
-          <div class="seg">
-            <select id="ord-type" aria-label="Тип заказа"><option>В заведении</option><option>На вынос</option></select>
-            <select id="ord-pay" aria-label="Оплата"><option>Карта</option><option>Наличные</option></select>
-          </div>
-          <div id="cart-box" class="lines"></div>
-          <div class="total"><span>К оплате</span><b id="cart-total">0 ₸</b></div>
-          <button id="btn-submit-order" class="ok" style="height:50px" onclick="submitOrder()">Оформить заказ</button>
-        </div>
-      </div>
-      <button class="cartbar" onclick="toggleReceipt()"><span id="cb-count">Чек пуст</span><span id="cb-total">0 ₸</span></button>
-    </section>
+    def enc(self, text: str) -> str:
+        return self._fernet.encrypt(text.encode()).decode()
 
-    <!-- Заказы -->
-    <section id="sec-orders" class="hidden">
-      <div class="head"><div><h2>Заказы</h2><p>Активные и завершённые чеки</p></div><button class="sec" onclick="loadOrders()">Обновить</button></div>
-      <div class="panel flat"><div class="tbl"><table class="rt">
-        <thead><tr><th>№</th><th>Стол</th><th>Состав</th><th>Сумма</th><th>Статус</th><th>Кассир</th><th></th></tr></thead>
-        <tbody id="orders-body"></tbody></table></div></div>
-    </section>
+    def dec(self, token_text: str) -> str:
+        return self._fernet.decrypt(token_text.encode()).decode()
 
-    <!-- Меню -->
-    <section id="sec-menu" class="hidden">
-      <div class="head"><div><h2>Меню и склад</h2><p>Цены, скидки и остатки</p></div>
-        <input id="menu-search" placeholder="Название или категория" oninput="renderMenu()" style="max-width:260px"></div>
-      <div id="menu-add-card" class="panel hidden">
-        <h3 style="margin-bottom:12px">Новая позиция</h3>
-        <div class="row">
-          <input id="m-name" placeholder="Название" style="flex:2 1 180px">
-          <select id="m-cat"><option>Первые блюда</option><option>Вторые блюда</option><option>Гарниры</option><option>Салаты</option><option>Десерты</option><option>Напитки</option></select>
-          <input id="m-ing" placeholder="Состав" style="flex:2 1 180px">
-          <input id="m-price" type="number" inputmode="decimal" placeholder="Цена, ₸" style="flex:0 1 110px">
-          <input id="m-stock" type="number" inputmode="numeric" placeholder="Остаток" value="30" style="flex:0 1 100px">
-          <button class="ok" onclick="addMenuItem()">Добавить</button>
-        </div>
-      </div>
-      <div class="panel flat" style="margin-top:16px"><div class="tbl"><table class="rt">
-        <thead><tr><th>ID</th><th>Блюдо</th><th>Категория</th><th>Состав</th><th>Цена</th><th>Скидка</th><th>Остаток</th><th></th></tr></thead>
-        <tbody id="menu-body"></tbody></table></div></div>
-    </section>
+    def chat_id(self, tg_enc: str):
+        if not tg_enc:
+            return None
+        try:
+            return int(self._fernet.decrypt(tg_enc.encode()).decode())
+        except Exception:
+            return None
 
-    <!-- Профиль -->
-    <section id="sec-security" class="hidden">
-      <div class="head"><div><h2>Безопасность</h2><p>Telegram, Google и пароль</p></div></div>
-      <div class="two">
-        <div class="panel">
-          <h3>Подтверждение входа через Telegram</h3>
-          <p class="muted small" style="margin:6px 0 14px">Вход по паролю и сброс пароля подтверждаются кодом из Telegram. Также появляется вход без пароля.</p>
-          <div id="tg-status-box" style="margin-bottom:14px"></div>
-          <div class="row"><button onclick="generateTgQR()">Привязать Telegram</button><button id="btn-tg-unlink" class="danger hidden" onclick="unlinkTg()">Отвязать</button></div>
-          <div id="qr-area" class="hidden" style="margin-top:18px;text-align:center">
-            <div style="font-weight:600">Наведите камеру телефона на QR-код</div>
-            <div class="muted small">или откройте ссылку и нажмите Start в Telegram</div>
-            <div id="qr-container" class="qr"></div>
-            <div><a id="tg-direct-link" href="#" target="_blank" rel="noopener" style="color:var(--accent);font-size:13px;word-break:break-all"></a></div>
-            <button class="sec sm" style="margin-top:12px" onclick="loadProfile()">Проверить привязку</button>
-          </div>
-        </div>
-        <div class="stack">
-          <div class="panel">
-            <h3>Google</h3>
-            <p class="muted small" style="margin:6px 0 14px">Вход в один клик через Google без кода из Telegram.</p>
-            <div id="google-status-box" style="margin-bottom:14px"></div>
-            <div class="row"><button class="google" onclick="startGoogleOAuth('link')">Привязать Google</button><button id="btn-gg-unlink" class="danger hidden" onclick="unlinkGoogle()">Отвязать</button></div>
-          </div>
-          <div class="panel">
-            <h3 id="pw-card-title" style="margin-bottom:12px">Смена пароля</h3>
-            <div class="stack">
-              <input id="cp-old" type="password" placeholder="Текущий пароль" autocomplete="current-password">
-              <input id="cp-new" type="password" placeholder="Новый пароль (от 8 символов)" autocomplete="new-password">
-              <button id="btn-save-pw" onclick="changePass()">Сохранить пароль</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
 
-    <!-- Персонал -->
-    <section id="sec-admin" class="hidden">
-      <div class="head"><div><h2>Персонал и резервные копии</h2><p>Доступ сотрудников, инвайты, отчёты и бэкапы</p></div></div>
-      <div class="panel">
-        <div class="row">
-          <button onclick="makeInvite()">Создать инвайт-код</button>
-          <button class="ok" onclick="downloadFile('/api/admin/backup/excel','GurmanPOS_Report.xlsx')">Отчёт Excel</button>
-          <button class="sec" onclick="downloadFile('/api/admin/backup/json','GurmanPOS_SignedBackup.json')">Бэкап JSON с HMAC</button>
-          <label class="sec" style="height:44px;display:inline-flex;align-items:center;padding:0 16px;border:1px solid var(--line);border-radius:10px;cursor:pointer;font-weight:600;background:var(--surface-2)">Восстановить из JSON<input type="file" accept=".json" style="display:none" onchange="restoreBackup(this)"></label>
-        </div>
-      </div>
-      <div class="panel flat" style="margin-top:16px"><h3 style="margin-bottom:10px">Сотрудники</h3><div class="tbl"><table class="rt">
-        <thead><tr><th>Логин</th><th>Роль</th><th>Telegram</th><th>Google</th><th></th></tr></thead>
-        <tbody id="users-body"></tbody></table></div></div>
-    </section>
+class DBAuditHandler(logging.Handler):
+    def __init__(self, database: PostgresDB):
+        super().__init__()
+        self._db = database
+        self._writing = False
 
-    <!-- Журнал -->
-    <section id="sec-logs" class="hidden">
-      <div class="head"><div><h2>Журнал аудита</h2><p>История за всё время в БД, зашифрованный бэкап и восстановление</p></div></div>
-      <div class="panel">
-        <div class="row" style="margin-bottom:14px">
-          <input id="log-s" placeholder="С: 08:00:00 или 2026-11-23" style="flex:1 1 170px">
-          <input id="log-e" placeholder="По: 18:00:00" style="flex:1 1 140px">
-          <button onclick="loadLogs()">Применить</button>
-          <button class="sec" onclick="resetLogs()">Сбросить</button>
-        </div>
-        <div class="row" style="margin-bottom:14px">
-          <button class="sec sm" onclick="presetTime('02:00:00','05:00:00')">Ночь</button>
-          <button class="sec sm" onclick="presetTime('08:00:00','12:00:00')">Утро</button>
-          <button class="sec sm" onclick="presetTime('14:00:00','17:00:00')">День</button>
-          <button class="sec sm" onclick="presetTime('18:00:00','23:00:00')">Вечер</button>
-          <button class="sec sm" onclick="downloadFile('/api/admin/backup/logs/json','GurmanPOS_Logs_Encrypted.json')">Бэкап логов (JSON)</button>
-          <label class="sec sm" style="height:36px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;font-weight:600;background:var(--surface-2)">Восстановить логи<input type="file" accept=".json" style="display:none" onchange="restoreLogsBackup(this)"></label>
-        </div>
-        <div id="log-box" class="log"></div>
-      </div>
-    </section>
-  </main>
-</div>
+    def emit(self, record: logging.LogRecord):
+        if self._writing or record.name.startswith("uvicorn"):
+            return
+        try:
+            self._writing = True
+            msg = record.getMessage()
+            cat_match = re.match(r"^\[([^\]]+)\]\s*", msg)
+            category = cat_match.group(1) if cat_match else "АУДИТ"
+            actor_match = re.search(r"'([A-Za-z0-9_.-]{3,32})'", msg)
+            actor = actor_match.group(1) if actor_match else "system"
+            ts = datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S")
+            self._db.execute(
+                "INSERT INTO audit_logs (created_at, level, actor, category, message) VALUES (%s, %s, %s, %s, %s)",
+                (ts, record.levelname.ljust(7), actor[:64], category[:64], msg),
+            )
+        except Exception:
+            pass
+        finally:
+            self._writing = False
 
-<script>
-let TOKEN = localStorage.getItem('sv_token') || '';
-let USER = JSON.parse(localStorage.getItem('sv_user') || 'null');
-let MENU_CACHE = [], CART = [], CAT = 'Все';
-let PENDING_2FA = { id: '', mode: 'login', newPass: '' };
-const SECTIONS = ['pos','orders','menu','security','admin','logs'];
-const CAT_COLORS = {
-  'Первые блюда': '#E8B65C',
-  'Вторые блюда': '#F0707A',
-  'Гарниры': '#D9C36A',
-  'Салаты': '#6FD3A0',
-  'Десерты': '#E28AD4',
-  'Напитки': '#6BA8F2'
-};
-const $ = id => document.getElementById(id);
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const money = n => Number(n).toLocaleString('ru-RU') + ' ₸';
-const finalPrice = m => Math.round(m.price * (1 - m.discount / 100));
 
-let toastTimer;
-function toast(msg, err) {
-  let t = $('toast');
-  if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); }
-  t.className = 'toast' + (err ? ' err' : ''); t.textContent = msg; t.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 3500);
-}
-const fail = e => toast(e.message, true);
+db = PostgresDB(DATABASE_URL)
+logger.addHandler(DBAuditHandler(db))
 
-function clearAllInputs() {
-  ['l-user','l-pass','r-user','r-pass','r-invite','g-reg-user','g-reg-pass','rst-user','rst-newpass','rst-code','m2fa-code','cp-old','cp-new','m-name','m-ing','m-price','menu-search','pos-search','log-s','log-e']
-    .forEach(id => { const el = $(id); if (el) el.value = ''; });
-  $('ord-table').value = 'Стол №1'; $('m-stock').value = '30';
-  CART = []; renderCart(); CAT = 'Все';
-  PENDING_2FA = { id: '', mode: 'login', newPass: '' };
-  closeModal('modal-2fa'); closeModal('modal-google-creds'); $('qr-area').classList.add('hidden');
-}
+sessions: dict[str, dict] = {}
+challenges: dict[str, dict] = {}
+link_tokens: dict[str, dict] = {}
+oauth_states: dict[str, dict] = {}
+invites: dict[str, float] = {}
+tg_offset = 0
+bot_username = ""
 
-async function api(method, path, body = null) {
-  const opts = { method, headers: { 'Content-Type': 'application/json' } };
-  if (TOKEN) opts.headers['Authorization'] = 'Bearer ' + TOKEN;
-  if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(path, opts);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    if (res.status === 401 && TOKEN) doLogout();
-    throw new Error(data.detail || 'Не удалось выполнить запрос');
-  }
-  return data;
-}
 
-/* ---------- Авторизация ---------- */
-function setAuthMode(mode, btn) {
-  ['login','register','reset'].forEach(m => $('form-' + m).classList.add('hidden'));
-  $('form-' + mode).classList.remove('hidden');
-  document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-}
-function open2FA(title, desc, state) {
-  PENDING_2FA = state;
-  $('m2fa-title').textContent = title; $('m2fa-desc').textContent = desc;
-  $('m2fa-code').value = ''; $('modal-2fa').classList.remove('hidden');
-  setTimeout(() => $('m2fa-code').focus(), 50);
-}
-async function doLogin() {
-  try {
-    const res = await api('POST', '/api/auth/login', { username: $('l-user').value, password: $('l-pass').value });
-    if (res.status === '2fa_required') return open2FA('Подтвердите вход', 'Введите 6-значный код, отправленный в ваш Telegram.', { id: res.challenge_id, mode: 'login' });
-    saveSession(res);
-  } catch (e) { fail(e); }
-}
-async function doTgLoginRequest() {
-  const username = $('l-user').value.trim();
-  if (!username) return toast('Введите логин, чтобы получить код в Telegram', true);
-  try {
-    const res = await api('POST', '/api/auth/login/tg/request', { username });
-    open2FA('Вход по коду из Telegram', `Код отправлен в Telegram аккаунта «${username}».`, { id: res.challenge_id, mode: 'tg_login' });
-  } catch (e) { fail(e); }
-}
-async function submit2FA() {
-  const code = $('m2fa-code').value.trim();
-  try {
-    if (PENDING_2FA.mode === 'login') {
-      const res = await api('POST', '/api/auth/2fa', { challenge_id: PENDING_2FA.id, code });
-      closeModal('modal-2fa'); saveSession(res);
-    } else if (PENDING_2FA.mode === 'tg_login') {
-      const res = await api('POST', '/api/auth/login/tg/confirm', { challenge_id: PENDING_2FA.id, code });
-      closeModal('modal-2fa'); saveSession(res);
-    } else {
-      await api('POST', '/api/auth/reset/tg/confirm', { challenge_id: PENDING_2FA.id, code, new_password: PENDING_2FA.newPass });
-      closeModal('modal-2fa'); clearAllInputs(); setAuthMode('login', $('atab-login'));
-      toast('Пароль изменён. Войдите с новым паролем.');
+def purge():
+    now = time.time()
+    for store in (sessions, challenges, link_tokens, oauth_states):
+        for k in [k for k, v in store.items() if v["expires"] < now]:
+            store.pop(k, None)
+    for k in [k for k, v in invites.items() if v < now]:
+        invites.pop(k, None)
+
+def drop_sessions(name: str):
+    for t in [t for t, s in sessions.items() if s["name"] == name]:
+        sessions.pop(t, None)
+
+def tg_call(method: str, params: dict | None = None):
+    if not TG_BOT_TOKEN:
+        raise RuntimeError("TG_BOT_TOKEN не настроен на сервере.")
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{TG_BOT_TOKEN}/{method}",
+        data=json.dumps(params or {}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.load(resp)["result"]
+
+def init_telegram_bot():
+    global bot_username
+    if not TG_BOT_TOKEN:
+        logger.warning("[TELEGRAM] TG_BOT_TOKEN не задан — 2FA через Telegram отключен.")
+        return
+    try:
+        me = tg_call("getMe")
+        bot_username = me["username"]
+        logger.info(f"[TELEGRAM] Бот @{bot_username} успешно подключен.")
+    except Exception as e:
+        logger.error(f"[TELEGRAM] Ошибка инициализации бота: {e}")
+
+def tg_poller():
+    global tg_offset
+    while True:
+        try:
+            if not TG_BOT_TOKEN:
+                time.sleep(5)
+                continue
+            updates = tg_call("getUpdates", {"offset": tg_offset, "timeout": 20, "allowed_updates": ["message"]})
+            for upd in updates:
+                tg_offset = upd["update_id"] + 1
+                msg = upd.get("message") or {}
+                text = (msg.get("text") or "").strip()
+                chat_id = (msg.get("chat") or {}).get("id")
+                if not chat_id or not text.startswith("/start"):
+                    continue
+                parts = text.split(maxsplit=1)
+                if len(parts) < 2:
+                    tg_call("sendMessage", {"chat_id": chat_id, "text": f"{APP_NAME}\nОткройте привязку в личном кабинете."})
+                    continue
+                purge()
+                entry = link_tokens.pop(parts[1].strip(), None)
+                if not entry or entry["expires"] < time.time():
+                    tg_call("sendMessage", {"chat_id": chat_id, "text": "Ссылка устарела. Сгенерируйте новый QR-код."})
+                    continue
+                db.execute("UPDATE users SET tg_enc = %s WHERE username = %s", (db.enc(str(chat_id)), entry["name"]))
+                logger.info(f"[2FA ПРИВЯЗКА] Пользователь '{entry['name']}' привязал Telegram (chat_id={chat_id})")
+                tg_call("sendMessage", {"chat_id": chat_id, "text": f"Telegram успешно привязан к учётной записи «{entry['name']}»."})
+        except Exception:
+            time.sleep(3)
+
+def send_2fa_code(name: str, rec: dict, kind: str) -> str:
+    cid = db.chat_id(rec.get("tg_enc", ""))
+    if not cid:
+        raise HTTPException(400, "К этому аккаунту не привязан Telegram.")
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    cid_token = secrets.token_urlsafe(24)
+    challenges[cid_token] = {
+        "name": name, "kind": kind,
+        "hash": hash_secret(code),
+        "expires": time.time() + CODE_TTL, "tries": CODE_TRIES,
     }
-  } catch (e) { fail(e); }
-}
-async function doRegister() {
-  try {
-    const res = await api('POST', '/api/auth/register', { username: $('r-user').value, password: $('r-pass').value, invite_code: $('r-invite').value });
-    clearAllInputs(); setAuthMode('login', $('atab-login'));
-    alert(`Учётная запись создана (роль: ${res.role.toUpperCase()}).\n\nРЕЗЕРВНЫЙ КОД ВОССТАНОВЛЕНИЯ:\n${res.recovery_code}\n\nСохраните его. Затем войдите.`);
-  } catch (e) { fail(e); }
-}
-async function doResetRecovery() {
-  try {
-    const res = await api('POST', '/api/auth/reset/recovery', { username: $('rst-user').value, recovery_code: $('rst-code').value, new_password: $('rst-newpass').value });
-    clearAllInputs(); setAuthMode('login', $('atab-login'));
-    alert(`Пароль сброшен.\nНовый резервный код: ${res.new_recovery_code}`);
-  } catch (e) { fail(e); }
-}
-async function doResetTgRequest() {
-  const username = $('rst-user').value.trim(), newPass = $('rst-newpass').value;
-  if (!username || newPass.length < 8) return toast('Укажите логин и новый пароль (от 8 символов)', true);
-  try {
-    const res = await api('POST', '/api/auth/reset/tg/request', { username });
-    open2FA('Сброс пароля', 'Введите 6-значный код из Telegram, чтобы сменить пароль.', { id: res.challenge_id, mode: 'reset', newPass });
-  } catch (e) { fail(e); }
-}
-
-/* ---------- Google OAuth ---------- */
-function onGoogleRegisterClick() {
-  const typedLogin = ($('r-user').value || '').trim();
-  const typedPass = $('r-pass').value || '';
-  if (typedLogin) {
-    startGoogleOAuth('register', { desired_username: typedLogin, desired_password: typedPass });
-    return;
-  }
-  $('g-reg-user').value = '';
-  $('g-reg-pass').value = typedPass;
-  $('modal-google-creds').classList.remove('hidden');
-  setTimeout(() => $('g-reg-user').focus(), 50);
-}
-function submitGoogleCreds() {
-  const u = $('g-reg-user').value.trim();
-  const p = $('g-reg-pass').value || '';
-  if (!u) return toast('Введите логин', true);
-  if (p && p.length < 8) return toast('Пароль должен быть не короче 8 символов', true);
-  $('r-user').value = u;
-  if (p) $('r-pass').value = p;
-  closeModal('modal-google-creds');
-  startGoogleOAuth('register', { desired_username: u, desired_password: p });
-}
-async function startGoogleOAuth(mode, extra = {}) {
-  try {
-    const inv = mode === 'register' ? $('r-invite').value : '';
-    const params = { mode, invite_code: inv, token: TOKEN };
-    if (extra.desired_username) params.desired_username = extra.desired_username;
-    if (extra.desired_password) params.desired_password = extra.desired_password;
-    const q = new URLSearchParams(params);
-    const res = await api('GET', '/api/oauth/google/start?' + q.toString());
-    window.open(res.auth_url, 'google_oauth', 'width=520,height=640');
-  } catch (e) { fail(e); }
-}
-window.addEventListener('message', ev => {
-  const d = ev.data || {};
-  if (d.type !== 'google_oauth') return;
-  if (!d.ok) return toast(d.error || 'Ошибка Google OAuth', true);
-  if (d.mode === 'link') { toast(`Google (${d.email}) привязан`); loadProfile(); }
-  else if (d.session) {
-    if (d.recovery_code) alert(`Регистрация завершена.\nЛогин: ${d.session.username}\nРезервный код: ${d.recovery_code}`);
-    saveSession(d.session);
-  }
-});
-
-function saveSession(sess) {
-  clearAllInputs();
-  TOKEN = sess.token; USER = sess;
-  localStorage.setItem('sv_token', TOKEN);
-  localStorage.setItem('sv_user', JSON.stringify(USER));
-  initApp();
-}
-function doLogout() {
-  if (TOKEN) fetch('/api/auth/logout', { method: 'POST', headers: { 'Authorization': 'Bearer ' + TOKEN } }).catch(() => {});
-  TOKEN = ''; USER = null;
-  localStorage.removeItem('sv_token'); localStorage.removeItem('sv_user');
-  clearAllInputs(); setAuthMode('login', $('atab-login')); nav('pos');
-  $('app-view').classList.add('hidden'); $('auth-view').classList.remove('hidden');
-}
-function closeModal(id) { $(id).classList.add('hidden'); }
-
-/* ---------- Каркас ---------- */
-function applyRoleUI() {
-  if (!USER) return;
-  ['sb-user','mb-user'].forEach(i => $(i).textContent = USER.username);
-  ['sb-role','mb-role'].forEach(i => $(i).textContent = USER.role.toUpperCase());
-  const isMgr = ['admin','manager'].includes(USER.role), isAdm = USER.role === 'admin';
-  $('menu-add-card').classList.toggle('hidden', !isMgr);
-  $('nav-admin').classList.toggle('hidden', !isAdm);
-  $('nav-logs').classList.toggle('hidden', !isAdm);
-}
-function initApp() {
-  if (!TOKEN || !USER) return;
-  $('auth-view').classList.add('hidden'); $('app-view').classList.remove('hidden');
-  applyRoleUI();
-  nav('pos');
-  loadMenu(); loadOrders(); loadProfile();
-  if (USER.role === 'admin') { loadUsers(); loadLogs(); }
-}
-function nav(sec) {
-  SECTIONS.forEach(s => $('sec-' + s).classList.toggle('hidden', s !== sec));
-  document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.nav === sec));
-  document.body.dataset.sec = sec;
-  toggleReceipt(false);
-  window.scrollTo(0, 0);
-}
-
-/* ---------- Профиль ---------- */
-async function loadProfile() {
-  try {
-    const me = await api('GET', '/api/me');
-    if (USER && USER.role !== me.role) {
-      USER.role = me.role;
-      localStorage.setItem('sv_user', JSON.stringify(USER));
-      applyRoleUI();
+    labels = {
+        "login": "подтверждения входа",
+        "tg_login": "входа по коду Telegram",
+        "reset": "сброса пароля"
     }
-    $('tg-status-box').innerHTML = me.tg_linked
-      ? '<span class="badge b-ok">Telegram привязан, вход защищён</span>'
-      : '<span class="badge b-warn">Telegram не привязан</span>';
-    $('btn-tg-unlink').classList.toggle('hidden', !me.tg_linked);
-    $('google-status-box').innerHTML = me.google_email
-      ? `<span class="badge b-acc">Привязан: ${esc(me.google_email)}</span>` : '<span class="badge">Не привязан</span>';
-    $('btn-gg-unlink').classList.toggle('hidden', !me.google_email);
+    label = labels.get(kind, "подтверждения операции")
+    try:
+        tg_call("sendMessage", {"chat_id": cid, "text": f"{APP_NAME}\nКод для {label}: {code}\nДействует 5 минут."})
+    except Exception:
+        challenges.pop(cid_token, None)
+        raise HTTPException(502, "Не удалось отправить код в Telegram. Проверьте TG_BOT_TOKEN.")
+    return cid_token
 
-    const hasPw = me.has_password !== false;
-    $('cp-old').classList.toggle('hidden', !hasPw);
-    $('pw-card-title').textContent = hasPw ? 'Смена пароля' : 'Установка пароля';
-    $('btn-save-pw').textContent = hasPw ? 'Сохранить пароль' : 'Задать пароль';
-  } catch (e) { fail(e); }
-}
-async function generateTgQR() {
-  try {
-    const res = await api('POST', '/api/me/telegram/link');
-    $('qr-area').classList.remove('hidden');
-    const box = $('qr-container'); box.innerHTML = '';
-    new QRCode(box, { text: res.url, width: 190, height: 190 });
-    const link = $('tg-direct-link'); link.href = res.url; link.textContent = res.url;
-  } catch (e) { fail(e); }
-}
-async function unlinkTg() {
-  if (!confirm('Отключить подтверждение входа через Telegram?')) return;
-  try { await api('DELETE', '/api/me/telegram/link'); $('qr-area').classList.add('hidden'); loadProfile(); } catch (e) { fail(e); }
-}
-async function unlinkGoogle() {
-  if (!confirm('Отвязать аккаунт Google?')) return;
-  try { await api('DELETE', '/api/me/google/link'); loadProfile(); } catch (e) { fail(e); }
-}
-async function changePass() {
-  try {
-    await api('POST', '/api/me/password', {
-      old_password: $('cp-old').classList.contains('hidden') ? '' : $('cp-old').value,
-      new_password: $('cp-new').value
-    });
-    $('cp-old').value = ''; $('cp-new').value = '';
-    toast('Пароль сохранён');
-    loadProfile();
-  } catch (e) { fail(e); }
-}
+def verify_2fa_code(cid_token: str, code: str, expected_kind: str) -> str:
+    purge()
+    ch = challenges.get(cid_token)
+    if not ch or ch["kind"] != expected_kind:
+        raise HTTPException(400, "Сессия подтверждения истекла. Запросите код заново.")
+    if not verify_secret(code.strip(), ch["hash"]):
+        ch["tries"] -= 1
+        if ch["tries"] <= 0:
+            challenges.pop(cid_token, None)
+            raise HTTPException(400, "Превышено число попыток ввода кода.")
+        raise HTTPException(400, f"Неверный код. Осталось попыток: {ch['tries']}.")
+    challenges.pop(cid_token, None)
+    return ch["name"]
 
-/* ---------- Меню, умные плитки и чек ---------- */
-async function loadMenu() {
-  try { MENU_CACHE = await api('GET', '/api/menu'); } catch (e) { return fail(e); }
-  renderDishes(); renderMenu();
-}
-function renderDishes() {
-  const cats = ['Все', ...new Set(MENU_CACHE.map(m => m.category))];
-  if (!cats.includes(CAT)) CAT = 'Все';
-  $('chips').innerHTML = cats.map(c => `<button class="chip ${c === CAT ? 'active' : ''}" data-c="${esc(c)}" onclick="CAT=this.dataset.c;renderDishes()">${esc(c)}</button>`).join('');
+def start_session(name: str) -> dict:
+    token = secrets.token_urlsafe(32)
+    sessions[token] = {"name": name, "expires": time.time() + SESSION_TTL}
+    rec = db.execute("SELECT * FROM users WHERE username = %s", (name,), "one")
+    logger.info(f"[АУДИТ] Создана веб-сессия для '{name}' (Роль: {rec['role']})")
+    return {
+        "token": token,
+        "username": name,
+        "role": rec["role"],
+        "tg_linked": bool(rec.get("tg_enc")),
+        "google_email": rec.get("google_email") or "",
+        "has_password": bool(rec.get("has_password", True)) if "has_password" in rec else True,
+    }
 
-  const q = ($('pos-search').value || '').trim().toLowerCase();
-  const filtered = MENU_CACHE
-    .filter(m => (CAT === 'Все' || m.category === CAT) && m.name.toLowerCase().includes(q))
-    .sort((a, b) => (b.stock > 0) - (a.stock > 0) || b.discount - a.discount || a.id - b.id);
+def current_user(authorization: str = Header(default="")):
+    token = authorization.removeprefix("Bearer ").strip()
+    s = sessions.get(token)
+    if not s or s["expires"] < time.time():
+        sessions.pop(token, None)
+        raise HTTPException(401, "Сессия истекла. Войдите заново.")
+    rec = db.execute("SELECT * FROM users WHERE username = %s", (s["name"],), "one")
+    if not rec:
+        sessions.pop(token, None)
+        raise HTTPException(401, "Учётная запись не найдена.")
+    return {"name": s["name"], "role": rec["role"], "rec": rec, "token": token}
 
-  if (!filtered.length) {
-    $('dishes').innerHTML = '<p class="muted" style="padding:24px 0">Ничего не найдено. Измените запрос или категорию.</p>';
-    return;
-  }
+def require_manager(u=Depends(current_user)):
+    if u["role"] not in ("admin", "manager"):
+        raise HTTPException(403, "Недостаточно прав.")
+    return u
 
-  const dishCard = m => {
-    const color = CAT_COLORS[m.category] || 'var(--accent)';
-    return `
-      <button class="dish" style="border-top-color:${color}" ${m.stock < 1 ? 'disabled' : ''} onclick="addToCart(${m.id})">
-        <span class="n">${esc(m.name)}</span>
-        <span class="meta">
-          <span class="p">${finalPrice(m)} ₸${m.discount > 0 ? `<s>${m.price}</s>` : ''}</span>
-          <span class="${m.stock < 5 ? 'low' : ''}">${m.stock < 1 ? 'нет' : 'ост. ' + m.stock}</span>
-        </span>
-      </button>`;
-  };
+def require_admin(u=Depends(current_user)):
+    if u["role"] != "admin":
+        raise HTTPException(403, "Только для администратора.")
+    return u
 
-  if (CAT !== 'Все' || q) {
-    $('dishes').innerHTML = `<div class="dishes">${filtered.map(dishCard).join('')}</div>`;
-    return;
-  }
 
-  const groups = new Map();
-  filtered.forEach(m => {
-    if (!groups.has(m.category)) groups.set(m.category, []);
-    groups.get(m.category).push(m);
-  });
+class LoginIn(BaseModel):
+    username: str
+    password: str
 
-  $('dishes').innerHTML = Array.from(groups.entries()).map(([cat, list]) => {
-    const color = CAT_COLORS[cat] || 'var(--accent)';
-    return `
-      <div class="cat-group">
-        <div class="cat-head">
-          <span class="cat-dot" style="background:${color}"></span>
-          <span class="cat-name">${esc(cat)}</span>
-          <span class="cat-cnt">${list.length}</span>
-        </div>
-        <div class="dishes">${list.map(dishCard).join('')}</div>
-      </div>`;
-  }).join('');
-}
-function addToCart(id) {
-  const dish = MENU_CACHE.find(m => m.id === id); if (!dish) return;
-  const ex = CART.find(c => c.id === id);
-  if (ex) { if (ex.qty >= dish.stock) return toast('На складе больше нет', true); ex.qty++; }
-  else CART.push({ id, name: dish.name, price: finalPrice(dish), qty: 1 });
-  renderCart();
-}
-function chQty(idx, d) {
-  const c = CART[idx], dish = MENU_CACHE.find(m => m.id === c.id);
-  if (d > 0 && dish && c.qty >= dish.stock) return toast('На складе больше нет', true);
-  c.qty += d; if (c.qty < 1) CART.splice(idx, 1);
-  renderCart();
-}
-function renderCart() {
-  const sum = CART.reduce((s, c) => s + c.price * c.qty, 0), cnt = CART.reduce((s, c) => s + c.qty, 0);
-  $('cart-box').innerHTML = CART.length ? CART.map((c, i) => `
-    <div class="line"><span class="ln">${esc(c.name)}</span><span class="sum">${money(c.price * c.qty)}</span>
-    <span class="qty"><button aria-label="Меньше" onclick="chQty(${i},-1)">−</button><span>${c.qty}</span><button aria-label="Больше" onclick="chQty(${i},1)">+</button></span>
-    <span class="muted small" style="text-align:right">${c.price} ₸ за шт.</span></div>`).join('')
-    : '<div class="muted small" style="padding:10px 0">Чек пуст. Выберите блюда слева.</div>';
-  $('cart-total').textContent = money(sum);
-  $('cb-count').textContent = cnt ? `Чек: ${cnt} поз.` : 'Чек пуст';
-  $('cb-total').textContent = money(sum);
-}
-function toggleReceipt(force) {
-  const r = $('receipt'); r.classList.toggle('open', typeof force === 'boolean' ? force : !r.classList.contains('open'));
-}
-async function submitOrder() {
-  if (!CART.length) return toast('Добавьте хотя бы одно блюдо', true);
-  const btn = $('btn-submit-order');
-  if (btn.disabled) return;
-  btn.disabled = true;
-  try {
-    await api('POST', '/api/orders', { table: $('ord-table').value, type: $('ord-type').value, payment: $('ord-pay').value, items: CART.map(c => ({ id: c.id, qty: c.qty })) });
-    CART = []; renderCart(); toggleReceipt(false); toast('Заказ оформлен');
-    loadOrders(); loadMenu();
-  } catch (e) { fail(e); } finally { btn.disabled = false; }
-}
+class TgLoginReqIn(BaseModel):
+    username: str
 
-function renderMenu() {
-  const q = ($('menu-search').value || '').toLowerCase();
-  const isMgr = ['admin','manager'].includes(USER.role);
-  $('menu-body').innerHTML = MENU_CACHE.filter(m => m.name.toLowerCase().includes(q) || m.category.toLowerCase().includes(q)).map(m => {
-    const discPrice = finalPrice(m);
-    const priceHtml = m.discount > 0
-      ? `<strong>${discPrice} ₸</strong> <s class="muted small">${m.price} ₸</s>`
-      : `<strong>${m.price} ₸</strong>`;
-    return `
-    <tr>
-      <td data-l="ID" class="muted">#${m.id}</td>
-      <td data-l="Блюдо"><strong>${esc(m.name)}</strong></td>
-      <td data-l="Категория"><span class="badge b-acc">${esc(m.category)}</span></td>
-      <td data-l="Состав" class="muted" style="max-width:260px">${esc(m.ingredients)}</td>
-      <td data-l="Цена">${priceHtml}</td>
-      <td data-l="Скидка">${m.discount > 0 ? `<span class="badge b-ok">−${m.discount}%</span>` : '0%'}</td>
-      <td data-l="Остаток"><span class="badge ${m.stock < 5 ? 'b-bad' : 'b-ok'}">${m.stock} шт</span></td>
-      ${isMgr ? `<td class="full"><div class="acts"><button class="sec sm" onclick="updStock(${m.id})">Остаток</button><button class="sec sm" onclick="updDisc(${m.id})">Скидка</button><button class="danger sm" onclick="delMenu(${m.id})">Удалить</button></div></td>` : '<td data-l="Действия">—</td>'}
-    </tr>`;
-  }).join('');
-}
-async function addMenuItem() {
-  try {
-    await api('POST', '/api/menu', { name: $('m-name').value, category: $('m-cat').value, ingredients: $('m-ing').value || 'Стандартный рецепт', price: parseFloat($('m-price').value), stock: parseInt($('m-stock').value) });
-    ['m-name','m-ing','m-price'].forEach(i => $(i).value = ''); toast('Позиция добавлена'); loadMenu();
-  } catch (e) { fail(e); }
-}
-async function updStock(id) {
-  const v = prompt('Новый остаток (шт):', '50'); if (v === null) return;
-  try { await api('PATCH', `/api/menu/${id}/stock`, { stock: parseInt(v) }); toast('Остаток обновлён в БД'); loadMenu(); } catch (e) { fail(e); }
-}
-async function updDisc(id) {
-  const v = prompt('Новая скидка (%):', '10'); if (v === null) return;
-  try { await api('PATCH', `/api/menu/${id}/discount`, { discount: parseInt(v) }); toast('Скидка обновлена в БД'); loadMenu(); } catch (e) { fail(e); }
-}
-async function delMenu(id) {
-  if (!confirm('Удалить позицию из меню?')) return;
-  try { await api('DELETE', `/api/menu/${id}`); toast('Позиция удалена из БД'); loadMenu(); } catch (e) { fail(e); }
-}
+class Verify2FAIn(BaseModel):
+    challenge_id: str
+    code: str
 
-/* ---------- Заказы, персонал, журнал ---------- */
-async function loadOrders() {
-  let list; try { list = await api('GET', '/api/orders'); } catch (e) { return fail(e); }
-  const isMgr = ['admin','manager'].includes(USER.role);
-  const statuses = ['Новый', 'Готовится', 'Выполнен', 'Отменен'];
-  $('orders-body').innerHTML = list.length ? list.map(o => {
-    const opts = statuses.map(s => `<option value="${s}" ${o.status === s ? 'selected' : ''}>${s}</option>`).join('');
-    return `
-    <tr>
-      <td data-l="№"><strong>#${o.id}</strong></td>
-      <td data-l="Стол">${esc(o.table)}<div class="muted small">${esc(o.type)}, ${esc(o.payment)}</div></td>
-      <td data-l="Состав" style="max-width:250px">${esc(o.items)}</td>
-      <td data-l="Сумма"><strong>${money(o.total)}</strong></td>
-      <td data-l="Статус"><select class="st-sel" aria-label="Статус заказа #${o.id}" onchange="setOrderSt(${o.id}, this.value)">${opts}</select></td>
-      <td data-l="Кассир">${esc(o.waiter)}<div class="muted small">${esc(o.created_at)}</div></td>
-      <td class="full">${isMgr ? `<div class="acts"><button class="danger sm" onclick="delOrder(${o.id})">Удалить</button></div>` : ''}</td>
-    </tr>`;
-  }).join('') : '<tr><td class="full muted">Заказов пока нет. Оформите первый на вкладке «Касса».</td></tr>';
-}
-async function setOrderSt(id, status) {
-  try {
-    await api('PATCH', `/api/orders/${id}/status`, { status });
-    toast(`Заказ #${id}: статус «${status}» сохранён`);
-    await Promise.all([loadOrders(), loadMenu()]);
-  } catch (e) {
-    fail(e);
-    loadOrders();
-  }
-}
-async function delOrder(id) {
-  if (!confirm('Удалить заказ?')) return;
-  try { await api('DELETE', `/api/orders/${id}`); toast('Заказ удалён из БД'); loadOrders(); loadMenu(); } catch (e) { fail(e); }
-}
+class RegisterIn(BaseModel):
+    username: str
+    password: str
+    invite_code: str = ""
 
-async function loadUsers() {
-  let users; try { users = await api('GET', '/api/admin/users'); } catch (e) { return fail(e); }
-  $('users-body').innerHTML = users.map(u => `
-    <tr>
-      <td data-l="Логин"><strong>${esc(u.login)}</strong></td>
-      <td data-l="Роль"><span class="badge b-acc">${esc(u.role.toUpperCase())}</span></td>
-      <td data-l="Telegram">${u.tg ? '<span class="badge b-ok">Включён</span>' : '<span class="muted">Нет</span>'}</td>
-      <td data-l="Google">${u.google_email ? esc(u.google_email) : '<span class="muted">—</span>'}</td>
-      <td class="full">${u.role !== 'admin' ? `<div class="acts">
-        <button class="sec sm" data-l="${esc(u.login)}" onclick="setRole(this.dataset.l,'manager')">Менеджер</button>
-        <button class="sec sm" data-l="${esc(u.login)}" onclick="setRole(this.dataset.l,'user')">Кассир</button>
-        <button class="danger sm" data-l="${esc(u.login)}" onclick="delUser(this.dataset.l)">Удалить</button></div>` : '<span class="muted">Администратор</span>'}</td>
-    </tr>`).join('');
-}
-async function setRole(login, role) { try { await api('PATCH', `/api/admin/users/${encodeURIComponent(login)}/role`, { role }); loadUsers(); } catch (e) { fail(e); } }
-async function delUser(login) { if (!confirm('Удалить сотрудника?')) return; try { await api('DELETE', `/api/admin/users/${encodeURIComponent(login)}`); loadUsers(); } catch (e) { fail(e); } }
-async function makeInvite() { try { const r = await api('POST', '/api/admin/invites'); prompt('Одноразовый код приглашения (действует 24 ч):', r.code); } catch (e) { fail(e); } }
+class ResetCodeIn(BaseModel):
+    username: str
+    recovery_code: str
+    new_password: str
 
-async function loadLogs() {
-  try {
-    const r = await api('GET', `/api/admin/logs?start_time=${encodeURIComponent($('log-s').value)}&end_time=${encodeURIComponent($('log-e').value)}`);
-    $('log-box').textContent = r.logs.join('\n') || 'Записей за этот период нет. Измените фильтр или нажмите «Сбросить».';
-  } catch (e) { fail(e); }
-}
-function presetTime(s, e) { $('log-s').value = s; $('log-e').value = e; loadLogs(); }
-function resetLogs() { $('log-s').value = ''; $('log-e').value = ''; loadLogs(); }
+class ResetTgRequestIn(BaseModel):
+    username: str
 
-async function downloadFile(url, filename) {
-  try {
-    const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } });
-    if (!res.ok) throw new Error('Не удалось скачать файл');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(await res.blob()); a.download = filename; a.click();
-  } catch (e) { fail(e); }
-}
-async function restoreBackup(input) {
-  const file = input.files[0]; if (!file) return;
-  try {
-    await api('POST', '/api/admin/restore/json', JSON.parse(await file.text()));
-    toast('База восстановлена, подпись HMAC-SHA256 верна');
-    loadMenu(); loadOrders(); loadUsers(); loadLogs();
-  } catch (e) { fail(e); }
-  input.value = '';
-}
-async function restoreLogsBackup(input) {
-  const file = input.files[0]; if (!file) return;
-  try {
-    const res = await api('POST', '/api/admin/restore/logs/json', JSON.parse(await file.text()));
-    toast(`Восстановлено записей логов: ${res.restored}`);
-    loadLogs();
-  } catch (e) { fail(e); }
-  input.value = '';
-}
+class ResetTgConfirmIn(BaseModel):
+    challenge_id: str
+    code: str
+    new_password: str
 
-renderCart();
-initApp();
-</script>
-</body>
-</html>
+class ChangePassIn(BaseModel):
+    old_password: str = ""
+    new_password: str
+
+class MenuIn(BaseModel):
+    name: str
+    category: str = "Прочее"
+    ingredients: str = "Стандартный рецепт"
+    price: float = Field(gt=0)
+    stock: int = Field(ge=0)
+
+class DiscountIn(BaseModel):
+    discount: int = Field(ge=0, le=100)
+
+class StockIn(BaseModel):
+    stock: int = Field(ge=0)
+
+class OrderLineIn(BaseModel):
+    id: int
+    qty: int = Field(ge=1)
+
+class OrderIn(BaseModel):
+    table: str = ""
+    type: Literal["В заведении", "На вынос"] = "В заведении"
+    payment: Literal["Карта", "Наличные"] = "Карта"
+    items: list[OrderLineIn] = Field(min_length=1)
+
+class StatusIn(BaseModel):
+    status: Literal["Новый", "Готовится", "Выполнен", "Отменен"]
+
+class RoleIn(BaseModel):
+    role: Literal["user", "manager"]
+
+
+app = FastAPI(title=APP_NAME)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+@app.on_event("startup")
+def on_startup():
+    init_telegram_bot()
+    threading.Thread(target=tg_poller, daemon=True).start()
+
+
+@app.get("/api/health")
+def health():
+    return {
+        "status": "ok",
+        "db": "PostgreSQL (Supabase)",
+        "tg_enabled": bool(TG_BOT_TOKEN and bot_username),
+        "google_enabled": bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET),
+    }
+
+
+@app.post("/api/auth/login")
+def login(b: LoginIn):
+    name = normalize(b.username)
+    purge()
+    rec = db.execute("SELECT * FROM users WHERE username = %s", (name,), "one")
+    if not rec:
+        verify_secret(b.password, DUMMY_HASH)
+        logger.warning(f"[АУДИТ ОШИБКА] Попытка входа несуществующего логина: '{name}'")
+        raise HTTPException(401, "Неверный логин или пароль.")
+
+    if rec["locked_until"] > time.time():
+        raise HTTPException(429, f"Аккаунт заблокирован. Подождите {int(rec['locked_until'] - time.time()) + 1} сек.")
+
+    if not verify_secret(b.password, rec["pw_hash"]):
+        failed = rec["failed"] + 1
+        locked = time.time() + LOCK_SECONDS if failed >= MAX_ATTEMPTS else 0
+        db.execute("UPDATE users SET failed = %s, locked_until = %s WHERE username = %s", (0 if locked else failed, locked, name))
+        logger.warning(f"[АУДИТ ОШИБКА] Неверный пароль для '{name}'")
+        raise HTTPException(401, "Неверный логин или пароль.")
+
+    db.execute("UPDATE users SET failed = 0 WHERE username = %s", (name,))
+    if rec.get("tg_enc") and TG_BOT_TOKEN:
+        cid = send_2fa_code(name, rec, "login")
+        return {"status": "2fa_required", "challenge_id": cid}
+    return {"status": "ok", **start_session(name)}
+
+
+@app.post("/api/auth/2fa")
+def login_2fa(b: Verify2FAIn):
+    name = verify_2fa_code(b.challenge_id, b.code, "login")
+    return {"status": "ok", **start_session(name)}
+
+
+@app.post("/api/auth/login/tg/request")
+def login_tg_request(b: TgLoginReqIn):
+    name = normalize(b.username)
+    purge()
+    if not TG_BOT_TOKEN:
+        raise HTTPException(400, "Telegram-бот не настроен на сервере.")
+    rec = db.execute("SELECT * FROM users WHERE username = %s", (name,), "one")
+    if not rec:
+        raise HTTPException(404, "Учётная запись с таким логином не найдена.")
+    if rec["locked_until"] > time.time():
+        raise HTTPException(429, f"Аккаунт заблокирован. Подождите {int(rec['locked_until'] - time.time()) + 1} сек.")
+    if not rec.get("tg_enc"):
+        raise HTTPException(400, "К этому аккаунту не привязан Telegram. Войдите по паролю и привяжите его в профиле.")
+    cid = send_2fa_code(name, rec, "tg_login")
+    logger.info(f"[TELEGRAM ВХОД] Запрошен одноразовый код входа для '{name}'")
+    return {"challenge_id": cid}
+
+
+@app.post("/api/auth/login/tg/confirm")
+def login_tg_confirm(b: Verify2FAIn):
+    name = verify_2fa_code(b.challenge_id, b.code, "tg_login")
+    db.execute("UPDATE users SET failed = 0 WHERE username = %s", (name,))
+    logger.info(f"[TELEGRAM ВХОД] Успешный беспарольный вход для '{name}'")
+    return {"status": "ok", **start_session(name)}
+
+
+@app.post("/api/auth/register")
+def register(b: RegisterIn):
+    name = normalize(b.username)
+    if not USERNAME_RE.match(name):
+        raise HTTPException(400, "Логин: 3–32 символа, латиница, цифры, _ . -")
+    if len(b.password) < MIN_PASSWORD:
+        raise HTTPException(400, f"Пароль должен быть не короче {MIN_PASSWORD} символов.")
+    if db.execute("SELECT 1 FROM users WHERE username = %s", (name,), "one"):
+        raise HTTPException(400, "Этот логин уже занят.")
+
+    has_admin = db.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1", (), "one") is not None
+    if has_admin:
+        exp = invites.get(norm_code(b.invite_code))
+        if not exp or exp < time.time():
+            raise HTTPException(403, "Нужен действительный код приглашения от администратора.")
+        invites.pop(norm_code(b.invite_code), None)
+        role = "user"
+    else:
+        role = "admin"
+
+    rec_code = new_recovery_code()
+    db.execute(
+        "INSERT INTO users (username, role, pw_hash, rec_hash) VALUES (%s, %s, %s, %s)",
+        (name, role, hash_secret(b.password), hash_secret(norm_code(rec_code)))
+    )
+    logger.info(f"[РЕГИСТРАЦИЯ] Зарегистрирован сотрудник '{name}' (Роль: {role})")
+    return {"recovery_code": rec_code, "role": role}
+
+
+@app.post("/api/auth/reset/recovery")
+def reset_by_recovery(b: ResetCodeIn):
+    name = normalize(b.username)
+    if len(b.new_password) < MIN_PASSWORD:
+        raise HTTPException(400, f"Новый пароль должен быть не короче {MIN_PASSWORD} символов.")
+    rec = db.execute("SELECT * FROM users WHERE username = %s", (name,), "one")
+    if not rec or not verify_secret(norm_code(b.recovery_code), rec["rec_hash"]):
+        logger.warning(f"[СБРОС ПАРОЛЯ] Неудачная попытка сброса по коду для '{name}'")
+        raise HTTPException(400, "Неверный логин или резервный код.")
+    new_rec = new_recovery_code()
+    try:
+        db.execute(
+            "UPDATE users SET pw_hash = %s, rec_hash = %s, failed = 0, locked_until = 0, has_password = TRUE WHERE username = %s",
+            (hash_secret(b.new_password), hash_secret(norm_code(new_rec)), name)
+        )
+    except Exception:
+        db.execute(
+            "UPDATE users SET pw_hash = %s, rec_hash = %s, failed = 0, locked_until = 0 WHERE username = %s",
+            (hash_secret(b.new_password), hash_secret(norm_code(new_rec)), name)
+        )
+    drop_sessions(name)
+    logger.warning(f"[СБРОС ПАРОЛЯ] Пароль для '{name}' сброшен по резервному коду")
+    return {"new_recovery_code": new_rec}
+
+
+@app.post("/api/auth/reset/tg/request")
+def reset_tg_req(b: ResetTgRequestIn):
+    name = normalize(b.username)
+    rec = db.execute("SELECT * FROM users WHERE username = %s", (name,), "one")
+    if not rec:
+        raise HTTPException(404, "Пользователь не найден.")
+    cid = send_2fa_code(name, rec, "reset")
+    return {"challenge_id": cid}
+
+
+@app.post("/api/auth/reset/tg/confirm")
+def reset_tg_confirm(b: ResetTgConfirmIn):
+    if len(b.new_password) < MIN_PASSWORD:
+        raise HTTPException(400, f"Новый пароль должен быть не короче {MIN_PASSWORD} символов.")
+    name = verify_2fa_code(b.challenge_id, b.code, "reset")
+    try:
+        db.execute("UPDATE users SET pw_hash = %s, failed = 0, locked_until = 0, has_password = TRUE WHERE username = %s", (hash_secret(b.new_password), name))
+    except Exception:
+        db.execute("UPDATE users SET pw_hash = %s, failed = 0, locked_until = 0 WHERE username = %s", (hash_secret(b.new_password), name))
+    drop_sessions(name)
+    logger.warning(f"[СБРОС ПАРОЛЯ] Пароль для '{name}' сброшен через Telegram 2FA")
+    return {"status": "ok"}
+
+
+@app.post("/api/auth/logout")
+def logout(u=Depends(current_user)):
+    sessions.pop(u["token"], None)
+    logger.info(f"[АУДИТ] Пользователь '{u['name']}' вышел из системы")
+    return {"status": "ok"}
+
+
+@app.get("/api/me")
+def get_me(u=Depends(current_user)):
+    rec = u["rec"]
+    return {
+        "username": u["name"],
+        "role": u["role"],
+        "tg_linked": bool(rec.get("tg_enc")),
+        "google_email": rec.get("google_email") or "",
+        "has_password": bool(rec.get("has_password", True)) if "has_password" in rec else True,
+    }
+
+
+@app.post("/api/me/password")
+def change_password(b: ChangePassIn, u=Depends(current_user)):
+    if len(b.new_password) < MIN_PASSWORD:
+        raise HTTPException(400, f"Новый пароль должен быть не короче {MIN_PASSWORD} символов.")
+
+    rec = u["rec"]
+    has_pw = bool(rec.get("has_password", True)) if "has_password" in rec else True
+
+    if has_pw:
+        if not b.old_password or not verify_secret(b.old_password, rec["pw_hash"]):
+            raise HTTPException(400, "Текущий пароль введён неверно.")
+        db.execute("UPDATE users SET pw_hash = %s WHERE username = %s", (hash_secret(b.new_password), u["name"]))
+        logger.info(f"[БЕЗОПАСНОСТЬ] Пользователь '{u['name']}' сменил пароль")
+    else:
+        try:
+            db.execute(
+                "UPDATE users SET pw_hash = %s, has_password = TRUE WHERE username = %s",
+                (hash_secret(b.new_password), u["name"]),
+            )
+        except Exception:
+            db.execute("UPDATE users SET pw_hash = %s WHERE username = %s", (hash_secret(b.new_password), u["name"]))
+        logger.info(f"[БЕЗОПАСНОСТЬ] Пользователь '{u['name']}' задал локальный пароль для Google-аккаунта")
+
+    return {"status": "ok"}
+
+
+@app.post("/api/me/telegram/link")
+def create_tg_link(u=Depends(current_user)):
+    if not TG_BOT_TOKEN or not bot_username:
+        raise HTTPException(400, "Telegram-бот не настроен (укажите TG_BOT_TOKEN в переменных Render).")
+    purge()
+    tok = secrets.token_urlsafe(18)
+    link_tokens[tok] = {"name": u["name"], "expires": time.time() + LINK_TTL}
+    url = f"https://t.me/{bot_username}?start={tok}"
+    return {"url": url, "bot": bot_username}
+
+
+@app.delete("/api/me/telegram/link")
+def unlink_tg(u=Depends(current_user)):
+    db.execute("UPDATE users SET tg_enc = '' WHERE username = %s", (u["name"],))
+    logger.warning(f"[БЕЗОПАСНОСТЬ] Пользователь '{u['name']}' отвязал Telegram 2FA")
+    return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------- #
+#  Google OAuth 2.0 (Прямой вход без Telegram 2FA, Регистрация, Привязка)
+# --------------------------------------------------------------------------- #
+def google_exchange(code: str, redirect_uri: str) -> dict:
+    body = urllib.parse.urlencode({
+        "code": code,
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    }).encode("utf-8")
+    req = urllib.request.Request(GOOGLE_TOKEN_URL, data=body, headers={"Content-Type": "application/x-www-form-urlencoded"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        tokens = json.load(resp)
+    id_token = tokens.get("id_token") or ""
+    parts = id_token.split(".")
+    if len(parts) < 2:
+        raise RuntimeError("Некорректный id_token от Google.")
+    pad = "=" * (-len(parts[1]) % 4)
+    return json.loads(base64.urlsafe_b64decode(parts[1] + pad))
+
+
+@app.get("/api/oauth/google/start")
+def google_start(
+    request: Request,
+    mode: Literal["login", "register", "link"] = "login",
+    invite_code: str = "",
+    desired_username: str = "",
+    desired_password: str = "",
+    token: str = "",
+):
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(400, "Google OAuth не настроен (задайте GOOGLE_CLIENT_ID и GOOGLE_CLIENT_SECRET на Render).")
+    purge()
+    link_user = ""
+    if mode == "link":
+        s = sessions.get(token)
+        if not s or s["expires"] < time.time():
+            raise HTTPException(401, "Сессия истекла.")
+        link_user = s["name"]
+
+    clean_user = normalize(desired_username) if desired_username else ""
+    if mode == "register":
+        if clean_user:
+            if not USERNAME_RE.match(clean_user):
+                raise HTTPException(400, "Логин: 3–32 символа, латиница, цифры, _ . -")
+            if db.execute("SELECT 1 FROM users WHERE username = %s", (clean_user,), "one"):
+                raise HTTPException(400, "Этот логин уже занят.")
+        if desired_password and len(desired_password) < MIN_PASSWORD:
+            raise HTTPException(400, f"Пароль должен быть не короче {MIN_PASSWORD} символов.")
+
+    state = secrets.token_urlsafe(24)
+    redirect_uri = str(request.base_url).rstrip("/") + "/api/oauth/google/callback"
+    oauth_states[state] = {
+        "mode": mode,
+        "invite_code": invite_code,
+        "desired_username": clean_user,
+        "desired_password": desired_password,
+        "link_user": link_user,
+        "redirect_uri": redirect_uri,
+        "expires": time.time() + 600,
+    }
+    params = urllib.parse.urlencode({
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "prompt": "select_account",
+    })
+    return {"auth_url": f"https://accounts.google.com/o/oauth2/v2/auth?{params}"}
+
+
+@app.get("/api/oauth/google/callback")
+def google_callback(code: str = "", state: str = "", error: str = ""):
+    def popup_html(payload: dict):
+        return HTMLResponse(f"""<!doctype html><html><body style="background:#0f172a;color:#f8fafc;font-family:sans-serif;text-align:center;padding-top:60px">
+        <h3>Авторизация завершена</h3><p>Окно закроется автоматически...</p>
+        <script>
+        if (window.opener) {{ window.opener.postMessage({json.dumps(payload)}, "*"); }}
+        window.close();
+        </script></body></html>""")
+
+    if error or not code or not state:
+        return popup_html({"type": "google_oauth", "ok": False, "error": f"Отменено или ошибка Google: {error or 'нет кода'}"})
+
+    st = oauth_states.pop(state, None)
+    if not st or st["expires"] < time.time():
+        return popup_html({"type": "google_oauth", "ok": False, "error": "Сессия OAuth истекла. Попробуйте снова."})
+
+    try:
+        claims = google_exchange(code, st["redirect_uri"])
+        sub = claims.get("sub", "")
+        email = (claims.get("email") or "").lower()
+        if not sub or not email:
+            return popup_html({"type": "google_oauth", "ok": False, "error": "Google не передал email профиля."})
+
+        mode = st["mode"]
+        if mode == "link":
+            owner = db.execute("SELECT username FROM users WHERE google_sub = %s", (sub,), "one")
+            if owner and owner["username"] != st["link_user"]:
+                return popup_html({"type": "google_oauth", "ok": False, "error": "Этот аккаунт Google уже привязан к другому сотруднику."})
+            db.execute("UPDATE users SET google_sub = %s, google_email = %s WHERE username = %s", (sub, email, st["link_user"]))
+            logger.info(f"[GOOGLE OAUTH] '{st['link_user']}' привязал Google ({email})")
+            return popup_html({"type": "google_oauth", "ok": True, "mode": "link", "email": email})
+
+        if mode == "login":
+            rec = db.execute("SELECT * FROM users WHERE google_sub = %s", (sub,), "one")
+            if not rec:
+                return popup_html({"type": "google_oauth", "ok": False, "error": f"Аккаунт {email} не привязан ни к одному сотруднику."})
+            if rec["locked_until"] > time.time():
+                return popup_html({"type": "google_oauth", "ok": False, "error": "Учётная запись временно заблокирована."})
+            db.execute("UPDATE users SET failed = 0 WHERE username = %s", (rec["username"],))
+            logger.info(f"[GOOGLE OAUTH] Прямой вход сотрудника '{rec['username']}' ({email})")
+            sess = start_session(rec["username"])
+            return popup_html({"type": "google_oauth", "ok": True, "mode": "login", "session": sess})
+
+        if mode == "register":
+            if db.execute("SELECT 1 FROM users WHERE google_sub = %s", (sub,), "one"):
+                return popup_html({"type": "google_oauth", "ok": False, "error": "Этот Google аккаунт уже зарегистрирован."})
+            has_admin = db.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1", (), "one") is not None
+            if has_admin:
+                exp = invites.get(norm_code(st["invite_code"]))
+                if not exp or exp < time.time():
+                    return popup_html({"type": "google_oauth", "ok": False, "error": "Неверный или просроченный код приглашения."})
+                invites.pop(norm_code(st["invite_code"]), None)
+                role = "user"
+            else:
+                role = "admin"
+
+            custom_login = st.get("desired_username") or ""
+            custom_pass = st.get("desired_password") or ""
+            if custom_login:
+                if not USERNAME_RE.match(custom_login):
+                    return popup_html({"type": "google_oauth", "ok": False, "error": "Логин: 3–32 символа, латиница, цифры, _ . -"})
+                if db.execute("SELECT 1 FROM users WHERE username = %s", (custom_login,), "one"):
+                    return popup_html({"type": "google_oauth", "ok": False, "error": f"Логин «{custom_login}» уже занят."})
+                uname = custom_login
+            else:
+                base_login = re.sub(r"[^a-z0-9_.-]", "", email.split("@")[0])[:24] or "user"
+                uname = base_login
+                i = 1
+                while db.execute("SELECT 1 FROM users WHERE username = %s", (uname,), "one"):
+                    uname = f"{base_login}{i}"
+                    i += 1
+
+            has_pw = bool(custom_pass and len(custom_pass) >= MIN_PASSWORD)
+            raw_secret = custom_pass if has_pw else secrets.token_urlsafe(24)
+            rec_code = new_recovery_code()
+            try:
+                db.execute(
+                    "INSERT INTO users (username, role, pw_hash, rec_hash, google_sub, google_email, has_password) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (uname, role, hash_secret(raw_secret), hash_secret(norm_code(rec_code)), sub, email, has_pw)
+                )
+            except Exception:
+                db.execute(
+                    "INSERT INTO users (username, role, pw_hash, rec_hash, google_sub, google_email) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (uname, role, hash_secret(raw_secret), hash_secret(norm_code(rec_code)), sub, email)
+                )
+            logger.info(f"[GOOGLE РЕГИСТРАЦИЯ] Зарегистрирован '{uname}' через Google ({email}, роль: {role})")
+            sess = start_session(uname)
+            return popup_html({"type": "google_oauth", "ok": True, "mode": "register", "session": sess, "recovery_code": rec_code})
+
+    except Exception as e:
+        return popup_html({"type": "google_oauth", "ok": False, "error": f"Ошибка OAuth: {e}"})
+
+
+@app.delete("/api/me/google/link")
+def unlink_google(u=Depends(current_user)):
+    db.execute("UPDATE users SET google_sub = NULL, google_email = '' WHERE username = %s", (u["name"],))
+    logger.warning(f"[GOOGLE OAUTH] Пользователь '{u['name']}' отвязал Google")
+    return {"status": "ok"}
+
+
+@app.get("/api/menu")
+def get_menu(u=Depends(current_user)):
+    rows = db.execute("SELECT * FROM menu ORDER BY id", (), "all")
+    for r in rows:
+        r["price"] = float(r["price"])
+    return rows
+
+@app.post("/api/menu")
+def add_menu(b: MenuIn, u=Depends(require_manager)):
+    row = db.execute(
+        "INSERT INTO menu (name, category, ingredients, price, discount, stock) VALUES (%s, %s, %s, %s, 0, %s) RETURNING *",
+        (b.name.strip(), b.category.strip(), b.ingredients.strip(), b.price, b.stock), "one"
+    )
+    if row:
+        row["price"] = float(row["price"])
+    logger.info(f"[МЕНЮ] '{u['name']}' добавил блюдо '{b.name}' ({b.price} тг)")
+    return row
+
+@app.patch("/api/menu/{item_id}/discount")
+def set_discount(item_id: int, b: DiscountIn, u=Depends(require_manager)):
+    row = db.execute("UPDATE menu SET discount = %s WHERE id = %s RETURNING id", (b.discount, item_id), "one")
+    if not row:
+        raise HTTPException(404, "Позиция в меню не найдена.")
+    logger.info(f"[МЕНЮ] '{u['name']}' установил скидку {b.discount}% на ID #{item_id}")
+    return {"status": "ok"}
+
+@app.patch("/api/menu/{item_id}/stock")
+def set_stock(item_id: int, b: StockIn, u=Depends(require_manager)):
+    row = db.execute("UPDATE menu SET stock = %s WHERE id = %s RETURNING id", (b.stock, item_id), "one")
+    if not row:
+        raise HTTPException(404, "Позиция в меню не найдена.")
+    logger.info(f"[СКЛАД] '{u['name']}' обновил остаток ID #{item_id} до {b.stock}")
+    return {"status": "ok"}
+
+@app.delete("/api/menu/{item_id}")
+def delete_menu(item_id: int, u=Depends(require_manager)):
+    db.execute("DELETE FROM menu WHERE id = %s", (item_id,))
+    logger.warning(f"[МЕНЮ] '{u['name']}' удалил позицию ID #{item_id}")
+    return {"status": "ok"}
+
+
+@app.get("/api/orders")
+def get_orders(u=Depends(current_user)):
+    rows = db.execute("SELECT * FROM orders ORDER BY id DESC", (), "all")
+    for r in rows:
+        r["table"] = r.pop("table_name")
+        r["total"] = float(r["total"])
+        r["created_at"] = r["created_at"].strftime("%Y-%m-%d %H:%M") if hasattr(r["created_at"], "strftime") else str(r["created_at"])[:16]
+    return rows
+
+@app.post("/api/orders")
+def create_order(b: OrderIn, u=Depends(current_user)):
+    merged: dict[int, int] = {}
+    for ln in b.items:
+        merged[ln.id] = merged.get(ln.id, 0) + ln.qty
+
+    lines, total = [], 0.0
+    for iid, q in merged.items():
+        row = db.execute("SELECT * FROM menu WHERE id = %s", (iid,), "one")
+        if not row:
+            raise HTTPException(400, "Позиция не найдена в меню.")
+        if row["stock"] < q:
+            raise HTTPException(409, f"Недостаточно «{row['name']}» на складе (остаток: {row['stock']}).")
+        pr = unit_price(row["price"], row["discount"])
+        total += pr * q
+        lines.append({"id": iid, "name": row["name"], "qty": q, "price": pr})
+
+    table_name = b.table.strip() or ("На вынос" if b.type == "На вынос" else "Стол №1")
+    summary = ", ".join(f"{l['name']} x{l['qty']}" for l in lines)
+    total = round(total, 2)
+
+    for l in lines:
+        db.execute("UPDATE menu SET stock = stock - %s WHERE id = %s", (l["qty"], l["id"]))
+
+    order = db.execute(
+        "INSERT INTO orders (table_name, type, items, total, payment, status, waiter) VALUES (%s, %s, %s, %s, %s, 'Новый', %s) RETURNING id",
+        (table_name, b.type, summary, total, b.payment, u["name"]), "one"
+    )
+    oid = order["id"]
+    for l in lines:
+        db.execute(
+            "INSERT INTO order_items (order_id, menu_item_id, name, qty, price) VALUES (%s, %s, %s, %s, %s)",
+            (oid, l["id"], l["name"], l["qty"], l["price"])
+        )
+
+    logger.info(f"[КАССА] Кассир '{u['name']}' оформил заказ #{oid} на {total} тг ({b.payment})")
+    return {"id": oid, "total": total}
+
+@app.patch("/api/orders/{order_id}/status")
+def update_order_status(order_id: int, b: StatusIn, u=Depends(current_user)):
+    row = db.execute("SELECT status FROM orders WHERE id = %s", (order_id,), "one")
+    if not row:
+        raise HTTPException(404, "Заказ не найден.")
+    prev_status = row["status"]
+    if prev_status == b.status:
+        return {"status": "ok"}
+
+    if b.status == "Отменен" and prev_status != "Отменен":
+        items = db.execute("SELECT menu_item_id, qty FROM order_items WHERE order_id = %s", (order_id,), "all")
+        for it in items:
+            db.execute("UPDATE menu SET stock = stock + %s WHERE id = %s", (it["qty"], it["menu_item_id"]))
+    elif prev_status == "Отменен" and b.status != "Отменен":
+        items = db.execute("SELECT menu_item_id, qty FROM order_items WHERE order_id = %s", (order_id,), "all")
+        for it in items:
+            db.execute("UPDATE menu SET stock = GREATEST(stock - %s, 0) WHERE id = %s", (it["qty"], it["menu_item_id"]))
+
+    db.execute("UPDATE orders SET status = %s WHERE id = %s", (b.status, order_id))
+    logger.info(f"[ЗАКАЗ] Статус заказа #{order_id} изменён с '{prev_status}' на '{b.status}' ({u['name']})")
+    return {"status": "ok"}
+
+@app.delete("/api/orders/{order_id}")
+def delete_order(order_id: int, u=Depends(require_manager)):
+    row = db.execute("SELECT status FROM orders WHERE id = %s", (order_id,), "one")
+    if row and row["status"] in ("Новый", "Готовится"):
+        items = db.execute("SELECT menu_item_id, qty FROM order_items WHERE order_id = %s", (order_id,), "all")
+        for it in items:
+            db.execute("UPDATE menu SET stock = stock + %s WHERE id = %s", (it["qty"], it["menu_item_id"]))
+    db.execute("DELETE FROM orders WHERE id = %s", (order_id,))
+    logger.warning(f"[ЗАКАЗ] Менеджер '{u['name']}' удалил заказ #{order_id}")
+    return {"status": "ok"}
+
+
+@app.get("/api/admin/users")
+def list_users(u=Depends(require_admin)):
+    rows = db.execute("SELECT username, role, tg_enc, google_email FROM users ORDER BY created_at", (), "all")
+    return [{"login": r["username"], "role": r["role"], "tg": bool(r["tg_enc"]), "google_email": r["google_email"] or ""} for r in rows]
+
+@app.patch("/api/admin/users/{name}/role")
+def set_role(name: str, b: RoleIn, u=Depends(require_admin)):
+    n = normalize(name)
+    rec = db.execute("SELECT role FROM users WHERE username = %s", (n,), "one")
+    if not rec:
+        raise HTTPException(404, "Сотрудник не найден.")
+    if rec["role"] == "admin":
+        raise HTTPException(409, "Роль администратора изменять нельзя.")
+    db.execute("UPDATE users SET role = %s WHERE username = %s", (b.role, n))
+    logger.warning(f"[БЕЗОПАСНОСТЬ] Админ '{u['name']}' изменил роль '{n}' на '{b.role}'")
+    return {"status": "ok"}
+
+@app.delete("/api/admin/users/{name}")
+def delete_user(name: str, u=Depends(require_admin)):
+    n = normalize(name)
+    rec = db.execute("SELECT role FROM users WHERE username = %s", (n,), "one")
+    if not rec or rec["role"] == "admin" or n == u["name"]:
+        raise HTTPException(409, "Нельзя удалить администратора или самого себя.")
+    db.execute("UPDATE orders SET waiter = %s WHERE waiter = %s", (u["name"], n))
+    db.execute("DELETE FROM users WHERE username = %s", (n,))
+    drop_sessions(n)
+    logger.warning(f"[БЕЗОПАСНОСТЬ] Админ '{u['name']}' удалил сотрудника '{n}'")
+    return {"status": "ok"}
+
+@app.post("/api/admin/invites")
+def make_invite(u=Depends(require_admin)):
+    purge()
+    code = new_recovery_code()
+    invites[norm_code(code)] = time.time() + INVITE_TTL
+    logger.info(f"[БЕЗОПАСНОСТЬ] Админ '{u['name']}' сгенерировал инвайт-код")
+    return {"code": code}
+
+
+@app.get("/api/admin/logs")
+def get_logs(start_time: Optional[str] = None, end_time: Optional[str] = None, u=Depends(require_admin)):
+    rows = db.execute(
+        "SELECT created_at, level, message FROM audit_logs ORDER BY id ASC",
+        (),
+        "all",
+    )
+    lines = []
+    for r in rows:
+        dt_str = (
+            r["created_at"].strftime("%Y-%m-%d %H:%M:%S")
+            if hasattr(r["created_at"], "strftime")
+            else str(r["created_at"])[:19]
+        )
+        lines.append(f"{dt_str} | {r['level']} | {r['message']}")
+
+    s_raw = start_time.strip() if start_time else ""
+    e_raw = end_time.strip() if end_time else ""
+    filtered = []
+    for line in lines:
+        log_dt = line[:19]
+        if len(log_dt) < 19 or log_dt[10] != " ":
+            continue
+        log_date, log_time = log_dt[:10], log_dt[11:19]
+        if s_raw:
+            if " " in s_raw and log_dt < s_raw: continue
+            elif "-" in s_raw and " " not in s_raw and log_date < s_raw: continue
+            elif ":" in s_raw and " " not in s_raw and log_time < (s_raw if s_raw.count(":") == 2 else f"{s_raw}:00"): continue
+        if e_raw:
+            if " " in e_raw and log_dt > e_raw: continue
+            elif "-" in e_raw and " " not in e_raw and log_date > e_raw: continue
+            elif ":" in e_raw and " " not in e_raw and log_time > (e_raw if e_raw.count(":") == 2 else f"{e_raw}:59"): continue
+        filtered.append(line)
+    return {"logs": filtered[-1000:]}
+
+
+@app.get("/api/admin/backup/logs/json")
+def export_logs_json(u=Depends(require_admin)):
+    rows = db.execute(
+        "SELECT created_at::text, level, actor, category, message FROM audit_logs ORDER BY id ASC",
+        (),
+        "all",
+    )
+    payload = {
+        "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "count": len(rows),
+        "logs": rows,
+    }
+    encrypted_blob = db.enc(json.dumps(payload, ensure_ascii=False))
+    envelope = {
+        "version": 1,
+        "format": "encrypted_audit_logs_json",
+        "cipher": "Fernet-AES128-CBC+HMAC-SHA256",
+        "exported_at": payload["exported_at"],
+        "encrypted_data": encrypted_blob,
+    }
+    logger.info(f"[БЭКАП ЛОГОВ] Админ '{u['name']}' выгрузил зашифрованный JSON-бэкап логов ({len(rows)} записей)")
+    raw = json.dumps(envelope, ensure_ascii=False, indent=2).encode("utf-8")
+    return StreamingResponse(
+        io.BytesIO(raw),
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=GurmanPOS_Logs_Encrypted.json"},
+    )
+
+
+@app.post("/api/admin/restore/logs/json")
+async def restore_logs_json(request: Request, u=Depends(require_admin)):
+    body = await request.json()
+    enc_blob = body.get("encrypted_data", "")
+    if not enc_blob:
+        raise HTTPException(400, "В файле отсутствует зашифрованный блок encrypted_data.")
+    try:
+        decrypted_text = db.dec(enc_blob)
+        payload = json.loads(decrypted_text)
+        entries = payload.get("logs")
+        if not isinstance(entries, list):
+            raise ValueError("Некорректная структура логов.")
+    except Exception:
+        logger.error(f"[ЦЕЛОСТНОСТЬ ЛОГОВ] Админ '{u['name']}' попытался загрузить повреждённый или чужой зашифрованный бэкап логов")
+        raise HTTPException(400, "Не удалось расшифровать бэкап логов: неверный ключ или файл повреждён.")
+
+    db.execute("DELETE FROM audit_logs")
+    for item in entries:
+        db.execute(
+            "INSERT INTO audit_logs (created_at, level, actor, category, message) VALUES (%s, %s, %s, %s, %s)",
+            (
+                item.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                (item.get("level") or "INFO")[:16],
+                (item.get("actor") or "system")[:64],
+                (item.get("category") or "АУДИТ")[:64],
+                item.get("message") or "",
+            ),
+        )
+    logger.warning(f"[ВОССТАНОВЛЕНИЕ ЛОГОВ] Админ '{u['name']}' восстановил {len(entries)} записей логов из зашифрованного JSON")
+    return {"status": "ok", "restored": len(entries)}
+
+
+@app.get("/api/admin/backup/json")
+def export_json(u=Depends(require_admin)):
+    users = db.execute("SELECT * FROM users", (), "all")
+    clean_users = [
+        {
+            "username": r["username"],
+            "role": r["role"],
+            "pw_hash": r["pw_hash"],
+            "rec_hash": r["rec_hash"],
+            "tg_enc": r.get("tg_enc", ""),
+            "google_sub": r.get("google_sub"),
+            "google_email": r.get("google_email"),
+            "has_password": bool(r.get("has_password", True)) if "has_password" in r else True,
+        }
+        for r in users
+    ]
+    menu = db.execute("SELECT id, name, category, ingredients, price::float, discount, stock FROM menu ORDER BY id", (), "all")
+    orders = db.execute("SELECT id, table_name, type, items, total::float, payment, status, waiter, created_at::text FROM orders ORDER BY id", (), "all")
+    order_items = db.execute("SELECT id, order_id, menu_item_id, name, qty, price::float FROM order_items ORDER BY id", (), "all")
+    data_block = {"users": clean_users, "menu": menu, "orders": orders, "order_items": order_items}
+    snapshot = {
+        "version": 4,
+        "engine": "PostgreSQL (Supabase)",
+        "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "integrity_hmac_sha256": compute_integrity_hmac(data_block),
+        "data": data_block
+    }
+    logger.info(f"[БЭКАП] Админ '{u['name']}' выгрузил подписанный JSON-снимок БД")
+    raw = json.dumps(snapshot, ensure_ascii=False, indent=2).encode("utf-8")
+    return StreamingResponse(io.BytesIO(raw), media_type="application/json",
+                             headers={"Content-Disposition": "attachment; filename=GurmanPOS_SignedBackup.json"})
+
+@app.post("/api/admin/restore/json")
+async def restore_json(request: Request, u=Depends(require_admin)):
+    snapshot = await request.json()
+    data_block = snapshot.get("data")
+    sig = snapshot.get("integrity_hmac_sha256", "")
+    if not data_block or not sig:
+        raise HTTPException(400, "Неверный формат файла бэкапа или отсутствует подпись целостности.")
+
+    expected_sig = compute_integrity_hmac(data_block)
+    if not hmac.compare_digest(sig, expected_sig):
+        logger.error(f"[ЦЕЛОСТНОСТЬ НАРУШЕНА] Админ '{u['name']}' попытался загрузить изменённый файл бэкапа!")
+        raise HTTPException(400, "ОШИБКА ЦЕЛОСТНОСТИ: Контрольная сумма HMAC-SHA256 не совпадает! Файл был модифицирован.")
+
+    db.execute("DELETE FROM order_items")
+    db.execute("DELETE FROM orders")
+    db.execute("DELETE FROM menu")
+    db.execute("DELETE FROM users")
+
+    for r in data_block["users"]:
+        try:
+            db.execute(
+                "INSERT INTO users (username, role, pw_hash, rec_hash, tg_enc, google_sub, google_email, has_password) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (r["username"], r["role"], r["pw_hash"], r["rec_hash"], r.get("tg_enc", ""), r.get("google_sub"), r.get("google_email"), r.get("has_password", True))
+            )
+        except Exception:
+            db.execute(
+                "INSERT INTO users (username, role, pw_hash, rec_hash, tg_enc, google_sub, google_email) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (r["username"], r["role"], r["pw_hash"], r["rec_hash"], r.get("tg_enc", ""), r.get("google_sub"), r.get("google_email"))
+            )
+    for m in data_block["menu"]:
+        db.execute(
+            "INSERT INTO menu (id, name, category, ingredients, price, discount, stock) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (m["id"], m["name"], m["category"], m["ingredients"], m["price"], m["discount"], m["stock"])
+        )
+    for o in data_block["orders"]:
+        db.execute(
+            "INSERT INTO orders (id, table_name, type, items, total, payment, status, waiter, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (o["id"], o["table_name"], o["type"], o["items"], o["total"], o["payment"], o["status"], o["waiter"], o["created_at"])
+        )
+    for oi in data_block.get("order_items", []):
+        db.execute(
+            "INSERT INTO order_items (id, order_id, menu_item_id, name, qty, price) VALUES (%s, %s, %s, %s, %s, %s)",
+            (oi["id"], oi["order_id"], oi["menu_item_id"], oi["name"], oi["qty"], oi["price"])
+        )
+    logger.warning(f"[ВОССТАНОВЛЕНИЕ] БД успешно восстановлена из проверенного бэкапа ({u['name']})")
+    return {"status": "ok"}
+
+@app.get("/api/admin/backup/excel")
+def export_excel(u=Depends(require_admin)):
+    output = io.BytesIO()
+    df_orders = pd.read_sql_query("SELECT id, table_name AS Стол, type AS Тип, items AS Состав, total AS Сумма, payment AS Оплата, status AS Статус, waiter AS Кассир FROM orders", db.conn)
+    df_menu = pd.read_sql_query("SELECT id, name AS Блюдо, category AS Категория, price AS Цена, discount AS Скидка, stock AS Остаток FROM menu", db.conn)
+    df_users = pd.read_sql_query("SELECT username AS Логин, role AS Роль, google_email AS Google FROM users", db.conn)
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df_orders.to_excel(writer, sheet_name="Заказы", index=False)
+        df_menu.to_excel(writer, sheet_name="Меню", index=False)
+        df_users.to_excel(writer, sheet_name="Сотрудники", index=False)
+    output.seek(0)
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             headers={"Content-Disposition": "attachment; filename=GurmanPOS_Report.xlsx"})
+
+
+if os.path.exists(STATIC_DIR):
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
