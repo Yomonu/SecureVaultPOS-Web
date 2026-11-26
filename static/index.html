@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0A0912">
-<title>SecureVault POS</title>
+<title>Гурман POS</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=Unbounded:wght@500;600&display=swap" rel="stylesheet">
@@ -200,7 +200,7 @@ input,select{background:var(--surface-2)}
 <div id="auth-view" class="auth">
   <div class="auth-main">
     <div class="auth-card">
-      <div class="auth-brand"><span class="logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2.2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>SecureVault POS</div>
+      <div class="auth-brand"><span class="logo"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2.5c0 1.2 1 1.5 1 2.5"/><path d="M14 2c0 1.3 1 1.7 1 2.8"/><path d="M3 10h14v4.5a4.5 4.5 0 0 1-4.5 4.5h-5A4.5 4.5 0 0 1 3 14.5V10z"/><path d="M17 11.5h2.5a1.5 1.5 0 0 1 0 3H17"/><path d="M7.5 10 19.5 6.5"/></svg></span>Гурман POS</div>
       <h2>Вход для сотрудников</h2>
       <p class="muted small">Используйте логин, выданный администратором.</p>
       <div class="tabs">
@@ -224,7 +224,7 @@ input,select{background:var(--surface-2)}
         <input id="r-invite" placeholder="Код приглашения" autocomplete="off">
         <button type="submit" class="ok">Создать учётную запись</button>
         <div class="or">или</div>
-        <button type="button" class="google" onclick="startGoogleOAuth('register')">Зарегистрироваться через Google</button>
+        <button type="button" class="google" onclick="onGoogleRegisterClick()">Зарегистрироваться через Google</button>
       </form>
 
       <form id="form-reset" class="stack hidden" autocomplete="off" onsubmit="event.preventDefault();doResetRecovery();">
@@ -235,6 +235,22 @@ input,select{background:var(--surface-2)}
         <div class="or">или</div>
         <button type="button" class="sec" onclick="doResetTgRequest()">Получить код в Telegram</button>
       </form>
+    </div>
+  </div>
+</div>
+
+<!-- ============ МОДАЛКА ЛОГИНА И ПАРОЛЯ ПРИ РЕГИСТРАЦИИ ЧЕРЕЗ GOOGLE ============ -->
+<div id="modal-google-creds" class="modal-bg hidden">
+  <div class="modal" style="text-align:left">
+    <h3 style="margin-bottom:6px;text-align:center">Введите логин</h3>
+    <p class="muted small" style="margin-bottom:16px;text-align:center">Укажите логин для входа и при желании пароль (от 8 символов).</p>
+    <div class="stack" style="margin-bottom:16px">
+      <input id="g-reg-user" placeholder="Логин (латиница, 3–32 символа)" autocomplete="off" onkeydown="if(event.key==='Enter')submitGoogleCreds()">
+      <input id="g-reg-pass" type="password" placeholder="Пароль (необязательно, от 8 символов)" autocomplete="new-password" onkeydown="if(event.key==='Enter')submitGoogleCreds()">
+    </div>
+    <div class="row">
+      <button class="ok" style="flex:1" onclick="submitGoogleCreds()">Продолжить</button>
+      <button class="sec" onclick="closeModal('modal-google-creds')">Отмена</button>
     </div>
   </div>
 </div>
@@ -253,7 +269,7 @@ input,select{background:var(--surface-2)}
 <div id="app-view" class="shell hidden">
   <aside class="side">
     <div>
-      <div class="brand"><div class="logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>SecureVault POS</div>
+      <div class="brand"><div class="logo"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2.5c0 1.2 1 1.5 1 2.5"/><path d="M14 2c0 1.3 1 1.7 1 2.8"/><path d="M3 10h14v4.5a4.5 4.5 0 0 1-4.5 4.5h-5A4.5 4.5 0 0 1 3 14.5V10z"/><path d="M17 11.5h2.5a1.5 1.5 0 0 1 0 3H17"/><path d="M7.5 10 19.5 6.5"/></svg></div>Гурман POS</div>
       <nav class="nav">
         <button class="nav-item active" data-nav="pos" onclick="nav('pos')">Касса</button>
         <button class="nav-item" data-nav="orders" onclick="nav('orders')">Заказы</button>
@@ -366,8 +382,8 @@ input,select{background:var(--surface-2)}
       <div class="panel">
         <div class="row">
           <button onclick="makeInvite()">Создать инвайт-код</button>
-          <button class="ok" onclick="downloadFile('/api/admin/backup/excel','SecureVault_Report.xlsx')">Отчёт Excel</button>
-          <button class="sec" onclick="downloadFile('/api/admin/backup/json','SecureVault_SignedBackup.json')">Бэкап JSON с HMAC</button>
+          <button class="ok" onclick="downloadFile('/api/admin/backup/excel','GurmanPOS_Report.xlsx')">Отчёт Excel</button>
+          <button class="sec" onclick="downloadFile('/api/admin/backup/json','GurmanPOS_SignedBackup.json')">Бэкап JSON с HMAC</button>
           <label class="sec" style="height:44px;display:inline-flex;align-items:center;padding:0 16px;border:1px solid var(--line);border-radius:10px;cursor:pointer;font-weight:600;background:var(--surface-2)">Восстановить из JSON<input type="file" accept=".json" style="display:none" onchange="restoreBackup(this)"></label>
         </div>
       </div>
@@ -391,7 +407,7 @@ input,select{background:var(--surface-2)}
           <button class="sec sm" onclick="presetTime('08:00:00','12:00:00')">Утро</button>
           <button class="sec sm" onclick="presetTime('14:00:00','17:00:00')">День</button>
           <button class="sec sm" onclick="presetTime('18:00:00','23:00:00')">Вечер</button>
-          <button class="sec sm" onclick="downloadFile('/api/admin/backup/logs/json','SecureVault_Logs_Encrypted.json')">Бэкап логов (JSON)</button>
+          <button class="sec sm" onclick="downloadFile('/api/admin/backup/logs/json','GurmanPOS_Logs_Encrypted.json')">Бэкап логов (JSON)</button>
           <label class="sec sm" style="height:36px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;font-weight:600;background:var(--surface-2)">Восстановить логи<input type="file" accept=".json" style="display:none" onchange="restoreLogsBackup(this)"></label>
         </div>
         <div id="log-box" class="log"></div>
@@ -429,12 +445,12 @@ function toast(msg, err) {
 const fail = e => toast(e.message, true);
 
 function clearAllInputs() {
-  ['l-user','l-pass','r-user','r-pass','r-invite','rst-user','rst-newpass','rst-code','m2fa-code','cp-old','cp-new','m-name','m-ing','m-price','menu-search','pos-search','log-s','log-e']
+  ['l-user','l-pass','r-user','r-pass','r-invite','g-reg-user','g-reg-pass','rst-user','rst-newpass','rst-code','m2fa-code','cp-old','cp-new','m-name','m-ing','m-price','menu-search','pos-search','log-s','log-e']
     .forEach(id => { const el = $(id); if (el) el.value = ''; });
   $('ord-table').value = 'Стол №1'; $('m-stock').value = '30';
   CART = []; renderCart(); CAT = 'Все';
   PENDING_2FA = { id: '', mode: 'login', newPass: '' };
-  closeModal('modal-2fa'); $('qr-area').classList.add('hidden');
+  closeModal('modal-2fa'); closeModal('modal-google-creds'); $('qr-area').classList.add('hidden');
 }
 
 async function api(method, path, body = null) {
@@ -518,10 +534,35 @@ async function doResetTgRequest() {
 }
 
 /* ---------- Google OAuth ---------- */
-async function startGoogleOAuth(mode) {
+function onGoogleRegisterClick() {
+  const typedLogin = ($('r-user').value || '').trim();
+  const typedPass = $('r-pass').value || '';
+  if (typedLogin) {
+    startGoogleOAuth('register', { desired_username: typedLogin, desired_password: typedPass });
+    return;
+  }
+  $('g-reg-user').value = '';
+  $('g-reg-pass').value = typedPass;
+  $('modal-google-creds').classList.remove('hidden');
+  setTimeout(() => $('g-reg-user').focus(), 50);
+}
+function submitGoogleCreds() {
+  const u = $('g-reg-user').value.trim();
+  const p = $('g-reg-pass').value || '';
+  if (!u) return toast('Введите логин', true);
+  if (p && p.length < 8) return toast('Пароль должен быть не короче 8 символов', true);
+  $('r-user').value = u;
+  if (p) $('r-pass').value = p;
+  closeModal('modal-google-creds');
+  startGoogleOAuth('register', { desired_username: u, desired_password: p });
+}
+async function startGoogleOAuth(mode, extra = {}) {
   try {
     const inv = mode === 'register' ? $('r-invite').value : '';
-    const q = new URLSearchParams({ mode, invite_code: inv, token: TOKEN });
+    const params = { mode, invite_code: inv, token: TOKEN };
+    if (extra.desired_username) params.desired_username = extra.desired_username;
+    if (extra.desired_password) params.desired_password = extra.desired_password;
+    const q = new URLSearchParams(params);
     const res = await api('GET', '/api/oauth/google/start?' + q.toString());
     window.open(res.auth_url, 'google_oauth', 'width=520,height=640');
   } catch (e) { fail(e); }
@@ -532,7 +573,7 @@ window.addEventListener('message', ev => {
   if (!d.ok) return toast(d.error || 'Ошибка Google OAuth', true);
   if (d.mode === 'link') { toast(`Google (${d.email}) привязан`); loadProfile(); }
   else if (d.session) {
-    if (d.recovery_code) alert(`Регистрация завершена.\nРезервный код: ${d.recovery_code}`);
+    if (d.recovery_code) alert(`Регистрация завершена.\nЛогин: ${d.session.username}\nРезервный код: ${d.recovery_code}`);
     saveSession(d.session);
   }
 });
