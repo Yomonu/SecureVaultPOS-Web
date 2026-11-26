@@ -44,7 +44,7 @@ logging.getLogger("uvicorn.access").propagate = False
 
 load_dotenv(ENV_FILE, override=True)
 
-APP_NAME = "SecureVault POS System"
+APP_NAME = "Гурман POS System"
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
@@ -625,7 +625,14 @@ def google_exchange(code: str, redirect_uri: str) -> dict:
 
 
 @app.get("/api/oauth/google/start")
-def google_start(request: Request, mode: Literal["login", "register", "link"] = "login", invite_code: str = "", token: str = ""):
+def google_start(
+    request: Request,
+    mode: Literal["login", "register", "link"] = "login",
+    invite_code: str = "",
+    desired_username: str = "",
+    desired_password: str = "",
+    token: str = "",
+):
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
         raise HTTPException(400, "Google OAuth не настроен (задайте GOOGLE_CLIENT_ID и GOOGLE_CLIENT_SECRET на Render).")
     purge()
@@ -636,11 +643,23 @@ def google_start(request: Request, mode: Literal["login", "register", "link"] = 
             raise HTTPException(401, "Сессия истекла.")
         link_user = s["name"]
 
+    clean_user = normalize(desired_username) if desired_username else ""
+    if mode == "register":
+        if clean_user:
+            if not USERNAME_RE.match(clean_user):
+                raise HTTPException(400, "Логин: 3–32 символа, латиница, цифры, _ . -")
+            if db.execute("SELECT 1 FROM users WHERE username = %s", (clean_user,), "one"):
+                raise HTTPException(400, "Этот логин уже занят.")
+        if desired_password and len(desired_password) < MIN_PASSWORD:
+            raise HTTPException(400, f"Пароль должен быть не короче {MIN_PASSWORD} символов.")
+
     state = secrets.token_urlsafe(24)
     redirect_uri = str(request.base_url).rstrip("/") + "/api/oauth/google/callback"
     oauth_states[state] = {
         "mode": mode,
         "invite_code": invite_code,
+        "desired_username": clean_user,
+        "desired_password": desired_password,
         "link_user": link_user,
         "redirect_uri": redirect_uri,
         "expires": time.time() + 600,
@@ -713,22 +732,34 @@ def google_callback(code: str = "", state: str = "", error: str = ""):
             else:
                 role = "admin"
 
-            base_login = re.sub(r"[^a-z0-9_.-]", "", email.split("@")[0])[:24] or "user"
-            uname = base_login
-            i = 1
-            while db.execute("SELECT 1 FROM users WHERE username = %s", (uname,), "one"):
-                uname = f"{base_login}{i}"
-                i += 1
+            custom_login = st.get("desired_username") or ""
+            custom_pass = st.get("desired_password") or ""
+            if custom_login:
+                if not USERNAME_RE.match(custom_login):
+                    return popup_html({"type": "google_oauth", "ok": False, "error": "Логин: 3–32 символа, латиница, цифры, _ . -"})
+                if db.execute("SELECT 1 FROM users WHERE username = %s", (custom_login,), "one"):
+                    return popup_html({"type": "google_oauth", "ok": False, "error": f"Логин «{custom_login}» уже занят."})
+                uname = custom_login
+            else:
+                base_login = re.sub(r"[^a-z0-9_.-]", "", email.split("@")[0])[:24] or "user"
+                uname = base_login
+                i = 1
+                while db.execute("SELECT 1 FROM users WHERE username = %s", (uname,), "one"):
+                    uname = f"{base_login}{i}"
+                    i += 1
+
+            has_pw = bool(custom_pass and len(custom_pass) >= MIN_PASSWORD)
+            raw_secret = custom_pass if has_pw else secrets.token_urlsafe(24)
             rec_code = new_recovery_code()
             try:
                 db.execute(
-                    "INSERT INTO users (username, role, pw_hash, rec_hash, google_sub, google_email, has_password) VALUES (%s, %s, %s, %s, %s, %s, FALSE)",
-                    (uname, role, hash_secret(secrets.token_urlsafe(24)), hash_secret(norm_code(rec_code)), sub, email)
+                    "INSERT INTO users (username, role, pw_hash, rec_hash, google_sub, google_email, has_password) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (uname, role, hash_secret(raw_secret), hash_secret(norm_code(rec_code)), sub, email, has_pw)
                 )
             except Exception:
                 db.execute(
                     "INSERT INTO users (username, role, pw_hash, rec_hash, google_sub, google_email) VALUES (%s, %s, %s, %s, %s, %s)",
-                    (uname, role, hash_secret(secrets.token_urlsafe(24)), hash_secret(norm_code(rec_code)), sub, email)
+                    (uname, role, hash_secret(raw_secret), hash_secret(norm_code(rec_code)), sub, email)
                 )
             logger.info(f"[GOOGLE РЕГИСТРАЦИЯ] Зарегистрирован '{uname}' через Google ({email}, роль: {role})")
             sess = start_session(uname)
@@ -966,7 +997,7 @@ def export_logs_json(u=Depends(require_admin)):
     return StreamingResponse(
         io.BytesIO(raw),
         media_type="application/json",
-        headers={"Content-Disposition": "attachment; filename=SecureVault_Logs_Encrypted.json"},
+        headers={"Content-Disposition": "attachment; filename=GurmanPOS_Logs_Encrypted.json"},
     )
 
 
@@ -1032,7 +1063,7 @@ def export_json(u=Depends(require_admin)):
     logger.info(f"[БЭКАП] Админ '{u['name']}' выгрузил подписанный JSON-снимок БД")
     raw = json.dumps(snapshot, ensure_ascii=False, indent=2).encode("utf-8")
     return StreamingResponse(io.BytesIO(raw), media_type="application/json",
-                             headers={"Content-Disposition": "attachment; filename=SecureVault_SignedBackup.json"})
+                             headers={"Content-Disposition": "attachment; filename=GurmanPOS_SignedBackup.json"})
 
 @app.post("/api/admin/restore/json")
 async def restore_json(request: Request, u=Depends(require_admin)):
@@ -1093,7 +1124,7 @@ def export_excel(u=Depends(require_admin)):
         df_users.to_excel(writer, sheet_name="Сотрудники", index=False)
     output.seek(0)
     return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                             headers={"Content-Disposition": "attachment; filename=SecureVault_Report.xlsx"})
+                             headers={"Content-Disposition": "attachment; filename=GurmanPOS_Report.xlsx"})
 
 
 if os.path.exists(STATIC_DIR):
