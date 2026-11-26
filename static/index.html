@@ -11,7 +11,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
 :root{
-  --bg:#0A0912; --surface:#12111C; --surface-2:#1A1827; --ink:#EDEAF7; --muted:#8F8BA6; --line:#2A2740; --line-2:#1D1A2E;
+  --bg:#0A0912; --surface:#12111C; --surface-2:#1A1827; --ink:#EDEAF7; --muted:#A19CB8; --line:#2A2740; --line-2:#1D1A2E;
   --accent:#B9A4F5; --accent-d:#CDBDF8; --accent-soft:rgba(185,164,245,.13);
   --ok:#6FD3A0; --ok-soft:rgba(111,211,160,.14); --warn:#E8B65C; --warn-soft:rgba(232,182,92,.14);
   --bad:#F0707A; --bad-soft:rgba(240,112,122,.14); --nav-h:64px;
@@ -43,6 +43,9 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .row>input,.row>select{flex:1 1 140px}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px}
 .panel+.panel{margin-top:16px}
+.admin-tools{background:linear-gradient(125deg,rgba(185,164,245,.07),transparent 70%),var(--surface)}
+.admin-tools h3{margin-bottom:6px}
+.admin-tools p{margin-bottom:16px}
 .badge{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:99px;font-size:12.5px;font-weight:600;background:var(--line-2);color:var(--muted)}
 .b-ok{background:var(--ok-soft);color:var(--ok)} .b-warn{background:var(--warn-soft);color:var(--warn)}
 .b-bad{background:var(--bad-soft);color:var(--bad)} .b-acc{background:var(--accent-soft);color:var(--accent)}
@@ -69,7 +72,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .nav{display:flex;flex-direction:column;gap:4px}
 .nav-item{background:transparent;color:var(--muted);justify-content:flex-start;height:42px;font-weight:500}
 .nav-item:hover{background:var(--surface-2);color:var(--ink)}
-.nav-item.active{background:var(--accent-soft);color:var(--accent)}
+.nav-item.active{background:var(--accent-soft);color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
 .who{border-top:1px solid var(--line);padding-top:14px}
 .who b{color:var(--ink);display:block;margin-bottom:6px}
 .who .badge{background:var(--surface-2);color:var(--ink)}
@@ -275,8 +278,8 @@ input,select{background:var(--surface-2)}
         <button class="nav-item" data-nav="orders" onclick="nav('orders')">Заказы</button>
         <button class="nav-item" data-nav="menu" onclick="nav('menu')">Меню</button>
         <button class="nav-item" data-nav="security" onclick="nav('security')">Профиль</button>
-        <button id="nav-admin" class="nav-item hidden" data-nav="admin" onclick="nav('admin')">Персонал</button>
-        <button id="nav-logs" class="nav-item hidden" data-nav="logs" onclick="nav('logs')">Журнал</button>
+        <button class="nav-item hidden" data-nav="admin" onclick="nav('admin')">Персонал</button>
+        <button class="nav-item hidden" data-nav="logs" onclick="nav('logs')">Журнал</button>
       </nav>
     </div>
     <div class="who">
@@ -378,13 +381,18 @@ input,select{background:var(--surface-2)}
 
     <!-- Персонал -->
     <section id="sec-admin" class="hidden">
-      <div class="head"><div><h2>Персонал и резервные копии</h2><p>Доступ сотрудников, инвайты, отчёты и бэкапы</p></div></div>
-      <div class="panel">
+      <div class="head">
+        <div><h2>Персонал</h2><p>Доступ сотрудников и роли</p></div>
+        <button onclick="makeInvite()">Пригласить сотрудника</button>
+      </div>
+      <div class="panel admin-tools">
+        <h3>Резервные копии</h3>
+        <p class="muted small">Восстановление заменяет текущие данные базы.</p>
         <div class="row">
-          <button onclick="makeInvite()">Создать инвайт-код</button>
           <button class="ok" onclick="downloadFile('/api/admin/backup/excel','GurmanPOS_Report.xlsx')">Отчёт Excel</button>
           <button class="sec" onclick="downloadFile('/api/admin/backup/bak','GurmanPOS_Backup.bak')">Бэкап БД (.bak)</button>
-          <label class="sec" style="height:44px;display:inline-flex;align-items:center;padding:0 16px;border:1px solid var(--line);border-radius:10px;cursor:pointer;font-weight:600;background:var(--surface-2)">Восстановить из .bak<input type="file" accept=".bak,.json" style="display:none" onchange="restoreBackup(this)"></label>
+          <button id="restore-bak" class="sec" onclick="$('backup-file').click()">Восстановить из файла</button>
+          <input id="backup-file" type="file" accept=".bak,.json" hidden onchange="restoreBackup(this)">
         </div>
       </div>
       <div class="panel flat" style="margin-top:16px"><h3 style="margin-bottom:10px">Сотрудники</h3><div class="tbl"><table class="rt">
@@ -408,7 +416,8 @@ input,select{background:var(--surface-2)}
           <button class="sec sm" onclick="presetTime('14:00:00','17:00:00')">День</button>
           <button class="sec sm" onclick="presetTime('18:00:00','23:00:00')">Вечер</button>
           <button class="sec sm" onclick="downloadFile('/api/admin/backup/logs/json','GurmanPOS_Logs_Encrypted.json')">Бэкап логов (JSON)</button>
-          <label class="sec sm" style="height:36px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;font-weight:600;background:var(--surface-2)">Восстановить логи<input type="file" accept=".json" style="display:none" onchange="restoreLogsBackup(this)"></label>
+          <button id="restore-logs" class="sec sm" onclick="$('logs-file').click()">Восстановить логи</button>
+          <input id="logs-file" type="file" accept=".json" hidden onchange="restoreLogsBackup(this)">
         </div>
         <div id="log-box" class="log"></div>
       </div>
@@ -422,6 +431,10 @@ let USER = JSON.parse(localStorage.getItem('sv_user') || 'null');
 let MENU_CACHE = [], CART = [], CAT = 'Все';
 let PENDING_2FA = { id: '', mode: 'login', newPass: '' };
 const SECTIONS = ['pos','orders','menu','security','admin','logs'];
+const STAFF_SECTIONS = ['pos','orders','menu','security'];
+const ROLE_SECTIONS = { admin: ['admin','logs','security'], manager: STAFF_SECTIONS, user: STAFF_SECTIONS };
+const ROLE_LABELS = { admin: 'Администратор', manager: 'Менеджер', user: 'Кассир' };
+const allowedSections = () => ROLE_SECTIONS[USER?.role] || ['security'];
 const CAT_COLORS = {
   'Первые блюда': '#E8B65C',
   'Вторые блюда': '#F0707A',
@@ -455,13 +468,14 @@ function clearAllInputs() {
 
 async function api(method, path, body = null) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
-  if (TOKEN) opts.headers['Authorization'] = 'Bearer ' + TOKEN;
+  const token = TOKEN;
+  if (token) opts.headers['Authorization'] = 'Bearer ' + token;
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    if (res.status === 401 && TOKEN) doLogout();
-    throw new Error(data.detail || 'Не удалось выполнить запрос');
+    if (res.status === 401 && token && token === TOKEN) doLogout(false);
+    throw new Error(typeof data.detail === 'string' ? data.detail : 'Не удалось выполнить запрос');
   }
   return data;
 }
@@ -585,36 +599,44 @@ function saveSession(sess) {
   localStorage.setItem('sv_user', JSON.stringify(USER));
   initApp();
 }
-function doLogout() {
-  if (TOKEN) fetch('/api/auth/logout', { method: 'POST', headers: { 'Authorization': 'Bearer ' + TOKEN } }).catch(() => {});
-  TOKEN = ''; USER = null;
+function doLogout(notifyServer = true) {
+  if (notifyServer && TOKEN) fetch('/api/auth/logout', { method: 'POST', headers: { 'Authorization': 'Bearer ' + TOKEN } }).catch(() => {});
+  TOKEN = ''; USER = null; MENU_CACHE = [];
   localStorage.removeItem('sv_token'); localStorage.removeItem('sv_user');
-  clearAllInputs(); setAuthMode('login', $('atab-login')); nav('pos');
+  clearAllInputs(); setAuthMode('login', $('atab-login'));
   $('app-view').classList.add('hidden'); $('auth-view').classList.remove('hidden');
 }
 function closeModal(id) { $(id).classList.add('hidden'); }
 
 /* ---------- Каркас ---------- */
 function applyRoleUI() {
-  if (!USER) return;
-  ['sb-user','mb-user'].forEach(i => $(i).textContent = USER.username);
-  ['sb-role','mb-role'].forEach(i => $(i).textContent = USER.role.toUpperCase());
-  const isMgr = ['admin','manager'].includes(USER.role), isAdm = USER.role === 'admin';
-  $('menu-add-card').classList.toggle('hidden', !isMgr);
-  $('nav-admin').classList.toggle('hidden', !isAdm);
-  $('nav-logs').classList.toggle('hidden', !isAdm);
+  ['sb-user','mb-user'].forEach(id => $(id).textContent = USER.username);
+  ['sb-role','mb-role'].forEach(id => $(id).textContent = ROLE_LABELS[USER.role] || USER.role);
+  const allowed = allowedSections();
+  document.querySelectorAll('.nav-item').forEach(button =>
+    button.classList.toggle('hidden', !allowed.includes(button.dataset.nav))
+  );
+  $('menu-add-card').classList.toggle('hidden', USER.role !== 'manager');
 }
-function initApp() {
+async function initApp() {
   if (!TOKEN || !USER) return;
-  $('auth-view').classList.add('hidden'); $('app-view').classList.remove('hidden');
+  if (!(await loadProfile()) || !USER) return;
   applyRoleUI();
-  nav('pos');
-  loadMenu(); loadOrders(); loadProfile();
+  nav(allowedSections()[0]);
+  $('auth-view').classList.add('hidden'); $('app-view').classList.remove('hidden');
   if (USER.role === 'admin') { loadUsers(); loadLogs(); }
+  else if (allowedSections().includes('pos')) { loadMenu(); loadOrders(); }
 }
 function nav(sec) {
+  const allowed = allowedSections();
+  if (!allowed.includes(sec)) sec = allowed[0];
   SECTIONS.forEach(s => $('sec-' + s).classList.toggle('hidden', s !== sec));
-  document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.nav === sec));
+  document.querySelectorAll('.nav-item').forEach(button => {
+    const active = button.dataset.nav === sec;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
   document.body.dataset.sec = sec;
   toggleReceipt(false);
   window.scrollTo(0, 0);
@@ -622,12 +644,15 @@ function nav(sec) {
 
 /* ---------- Профиль ---------- */
 async function loadProfile() {
+  const token = TOKEN;
   try {
     const me = await api('GET', '/api/me');
-    if (USER && USER.role !== me.role) {
+    if (!USER || TOKEN !== token) return false;
+    if (USER.role !== me.role) {
       USER.role = me.role;
       localStorage.setItem('sv_user', JSON.stringify(USER));
       applyRoleUI();
+      nav(document.body.dataset.sec);
     }
     $('tg-status-box').innerHTML = me.tg_linked
       ? '<span class="badge b-ok">Telegram привязан, вход защищён</span>'
@@ -641,7 +666,8 @@ async function loadProfile() {
     $('cp-old').classList.toggle('hidden', !hasPw);
     $('pw-card-title').textContent = hasPw ? 'Смена пароля' : 'Установка пароля';
     $('btn-save-pw').textContent = hasPw ? 'Сохранить пароль' : 'Задать пароль';
-  } catch (e) { fail(e); }
+    return true;
+  } catch (e) { fail(e); return false; }
 }
 async function generateTgQR() {
   try {
@@ -769,7 +795,7 @@ async function submitOrder() {
 
 function renderMenu() {
   const q = ($('menu-search').value || '').toLowerCase();
-  const isMgr = ['admin','manager'].includes(USER.role);
+  const isMgr = USER?.role === 'manager';
   $('menu-body').innerHTML = MENU_CACHE.filter(m => m.name.toLowerCase().includes(q) || m.category.toLowerCase().includes(q)).map(m => {
     const discPrice = finalPrice(m);
     const priceHtml = m.discount > 0
@@ -810,7 +836,7 @@ async function delMenu(id) {
 /* ---------- Заказы, персонал, журнал ---------- */
 async function loadOrders() {
   let list; try { list = await api('GET', '/api/orders'); } catch (e) { return fail(e); }
-  const isMgr = ['admin','manager'].includes(USER.role);
+  const isMgr = USER?.role === 'manager';
   const statuses = ['Новый', 'Готовится', 'Выполнен', 'Отменен'];
   $('orders-body').innerHTML = list.length ? list.map(o => {
     const opts = statuses.map(s => `<option value="${s}" ${o.status === s ? 'selected' : ''}>${s}</option>`).join('');
@@ -846,7 +872,7 @@ async function loadUsers() {
   $('users-body').innerHTML = users.map(u => `
     <tr>
       <td data-l="Логин"><strong>${esc(u.login)}</strong></td>
-      <td data-l="Роль"><span class="badge b-acc">${esc(u.role.toUpperCase())}</span></td>
+      <td data-l="Роль"><span class="badge b-acc">${esc(ROLE_LABELS[u.role] || u.role)}</span></td>
       <td data-l="Telegram">${u.tg ? '<span class="badge b-ok">Включён</span>' : '<span class="muted">Нет</span>'}</td>
       <td data-l="Google">${u.google_email ? esc(u.google_email) : '<span class="muted">—</span>'}</td>
       <td class="full">${u.role !== 'admin' ? `<div class="acts">
@@ -871,28 +897,45 @@ function resetLogs() { $('log-s').value = ''; $('log-e').value = ''; loadLogs();
 async function downloadFile(url, filename) {
   try {
     const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } });
-    if (!res.ok) throw new Error('Не удалось скачать файл');
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || 'Не удалось скачать файл');
+    }
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(await res.blob()); a.download = filename; a.click();
+    a.href = URL.createObjectURL(await res.blob());
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   } catch (e) { fail(e); }
 }
+async function readBackup(file) {
+  try { return JSON.parse(await file.text()); }
+  catch { throw new Error('Файл резервной копии не удалось прочитать.'); }
+}
+
 async function restoreBackup(input) {
-  const file = input.files[0]; if (!file) return;
-  try {
-    await api('POST', '/api/admin/restore/bak', JSON.parse(await file.text()));
-    toast('База восстановлена из .bak, подпись HMAC-SHA256 верна');
-    loadMenu(); loadOrders(); loadUsers(); loadLogs();
-  } catch (e) { fail(e); }
+  const file = input.files[0];
   input.value = '';
+  if (!file || !confirm(`Загрузить «${file.name}»? Текущие данные будут заменены. После восстановления войдите с учётной записью из копии.`)) return;
+  $('restore-bak').disabled = true;
+  try {
+    await api('POST', '/api/admin/restore/bak', await readBackup(file));
+    doLogout(false);
+    toast('База восстановлена. Войдите заново.');
+  } catch (e) { fail(e); }
+  finally { $('restore-bak').disabled = false; }
 }
 async function restoreLogsBackup(input) {
-  const file = input.files[0]; if (!file) return;
+  const file = input.files[0];
+  input.value = '';
+  if (!file || !confirm(`Заменить журнал аудита записями из «${file.name}»?`)) return;
+  $('restore-logs').disabled = true;
   try {
-    const res = await api('POST', '/api/admin/restore/logs/json', JSON.parse(await file.text()));
-    toast(`Восстановлено записей логов: ${res.restored}`);
+    const res = await api('POST', '/api/admin/restore/logs/json', await readBackup(file));
+    toast(`Восстановлено записей журнала: ${res.restored}`);
     loadLogs();
   } catch (e) { fail(e); }
-  input.value = '';
+  finally { $('restore-logs').disabled = false; }
 }
 
 renderCart();
