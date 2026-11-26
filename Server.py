@@ -12,7 +12,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 
 import pandas as pd
@@ -62,6 +62,23 @@ MIN_PASSWORD = 8
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,32}$")
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
+DEFAULT_CATEGORIES = [
+    ("Первые блюда", 1, "#E8B65C"),
+    ("Вторые блюда", 2, "#F0707A"),
+    ("Гарниры", 3, "#D9C36A"),
+    ("Салаты", 4, "#6FD3A0"),
+    ("Десерты", 5, "#E28AD4"),
+    ("Напитки", 6, "#6BA8F2"),
+]
+
+DEFAULT_TABLES = [
+    ("Стол №1", 4, "Основной зал", "free"),
+    ("Стол №2", 4, "Основной зал", "free"),
+    ("Стол №3", 2, "Основной зал", "free"),
+    ("Стол №4", 6, "Терраса", "free"),
+    ("На вынос", 1, "Стойка выдачи", "free"),
+]
+
 
 def b64e(data: bytes) -> str:
     return base64.b64encode(data).decode()
@@ -99,6 +116,9 @@ def normalize(username: str) -> str:
 
 def unit_price(price: float, discount: int) -> float:
     return round(float(price) * (1 - int(discount) / 100), 2)
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class PostgresDB:
@@ -155,11 +175,16 @@ class DBAuditHandler(logging.Handler):
             cat_match = re.match(r"^\[([^\]]+)\]\s*", msg)
             category = cat_match.group(1) if cat_match else "АУДИТ"
             actor_match = re.search(r"'([A-Za-z0-9_.-]{3,32})'", msg)
-            actor = actor_match.group(1) if actor_match else "system"
-            ts = datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S")
+            cand_actor = actor_match.group(1) if actor_match else None
+            actor = None
+            if cand_actor:
+                exists = self._db.execute("SELECT 1 FROM users WHERE username = %s", (cand_actor.lower(),), "one")
+                if exists:
+                    actor = cand_actor.lower()
+            ts = datetime.fromtimestamp(record.created, tz=timezone.utc)
             self._db.execute(
                 "INSERT INTO audit_logs (created_at, level, actor, category, message) VALUES (%s, %s, %s, %s, %s)",
-                (ts, record.levelname.ljust(7), actor[:64], category[:64], msg),
+                (ts, record.levelname.ljust(7), actor, category[:64], msg),
             )
         except Exception:
             pass
@@ -174,9 +199,101 @@ sessions: dict[str, dict] = {}
 challenges: dict[str, dict] = {}
 link_tokens: dict[str, dict] = {}
 oauth_states: dict[str, dict] = {}
-invites: dict[str, float] = {}
 tg_offset = 0
 bot_username = ""
+
+
+def seed_reference_tables():
+    for name, sort_order, color in DEFAULT_CATEGORIES:
+        db.execute(
+            "INSERT INTO categories (name, sort_order, color) VALUES (%s, %s, %s) ON CONFLICT (name) DO NOTHING",
+            (name, sort_order, color),
+        )
+    for label, seats, zone, status in DEFAULT_TABLES:
+        db.execute(
+            "INSERT INTO dining_tables (label, seats, zone, status) VALUES (%s, %s, %s, %s) ON CONFLICT (label) DO NOTHING",
+            (label, seats, zone, status),
+        )
+    db.execute(
+        """
+        UPDATE menu m
+        SET category_id = c.id
+        FROM categories c
+        WHERE m.category = c.name AND m.category_id IS DISTINCT FROM c.id
+        """
+    )
+    db.execute(
+        """
+        UPDATE orders o
+        SET table_id = t.id
+        FROM dining_tables t
+        WHERE o.table_name = t.label AND o.table_id IS DISTINCT FROM t.id
+        """
+    )
+
+
+def ensure_category(name: str) -> int:
+    clean = (name or "Прочее").strip()
+    row = db.execute("SELECT id FROM categories WHERE name = %s", (clean,), "one")
+    if row:
+        return row["id"]
+    created = db.execute(
+        "INSERT INTO categories (name, sort_order, color) VALUES (%s, 99, '#B9A4F5') ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+        (clean,),
+        "one",
+    )
+    return created["id"]
+
+
+def ensure_table(label: str, order_type: str = "В заведении") -> int:
+    clean = (label or "").strip() or ("На вынос" if order_type == "На вынос" else "Стол №1")
+    row = db.execute("SELECT id FROM dining_tables WHERE label = %s", (clean,), "one")
+    if row:
+        return row["id"]
+    created = db.execute(
+        "INSERT INTO dining_tables (label, seats, zone, status) VALUES (%s, 4, 'Основной зал', 'free') ON CONFLICT (label) DO UPDATE SET label = EXCLUDED.label RETURNING id",
+        (clean,),
+        "one",
+    )
+    return created["id"]
+
+
+def record_stock_movement(menu_item_id: int, delta: int, reason: str, actor: Optional[str]):
+    valid_actor = actor if actor and db.execute("SELECT 1 FROM users WHERE username = %s", (actor,), "one") else None
+    db.execute(
+        "INSERT INTO stock_movements (menu_item_id, delta, reason, actor) VALUES (%s, %s, %s, %s)",
+        (menu_item_id, delta, reason, valid_actor),
+    )
+
+
+def record_order_status_history(order_id: int, old_status: str, new_status: str, changed_by: Optional[str]):
+    valid_actor = changed_by if changed_by and db.execute("SELECT 1 FROM users WHERE username = %s", (changed_by,), "one") else None
+    db.execute(
+        "INSERT INTO order_status_history (order_id, old_status, new_status, changed_by) VALUES (%s, %s, %s, %s)",
+        (order_id, old_status, new_status, valid_actor),
+    )
+
+
+def consume_invite_code(raw_code: str, username: str) -> bool:
+    clean = norm_code(raw_code)
+    if not clean:
+        return False
+    now = utc_now()
+    rows = db.execute(
+        "SELECT id, code_hash FROM invite_codes WHERE used_at IS NULL AND (expires_at IS NULL OR expires_at > %s)",
+        (now,),
+        "all",
+    )
+    for r in rows:
+        if verify_secret(clean, r["code_hash"]):
+            updated = db.execute(
+                "UPDATE invite_codes SET used_by = %s, used_at = %s WHERE id = %s AND used_at IS NULL RETURNING id",
+                (username, now, r["id"]),
+                "one",
+            )
+            if updated:
+                return True
+    return False
 
 
 def purge():
@@ -184,8 +301,6 @@ def purge():
     for store in (sessions, challenges, link_tokens, oauth_states):
         for k in [k for k, v in store.items() if v["expires"] < now]:
             store.pop(k, None)
-    for k in [k for k, v in invites.items() if v < now]:
-        invites.pop(k, None)
 
 def drop_sessions(name: str):
     for t in [t for t, s in sessions.items() if s["name"] == name]:
@@ -388,6 +503,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 @app.on_event("startup")
 def on_startup():
+    seed_reference_tables()
     init_telegram_bot()
     threading.Thread(target=tg_poller, daemon=True).start()
 
@@ -412,13 +528,15 @@ def login(b: LoginIn):
         logger.warning(f"[АУДИТ ОШИБКА] Попытка входа несуществующего логина: '{name}'")
         raise HTTPException(401, "Неверный логин или пароль.")
 
-    if rec["locked_until"] > time.time():
-        raise HTTPException(429, f"Аккаунт заблокирован. Подождите {int(rec['locked_until'] - time.time()) + 1} сек.")
+    lock_ts = rec["locked_until"].timestamp() if hasattr(rec.get("locked_until"), "timestamp") else float(rec.get("locked_until") or 0)
+    if lock_ts > time.time():
+        raise HTTPException(429, f"Аккаунт заблокирован. Подождите {int(lock_ts - time.time()) + 1} сек.")
 
     if not verify_secret(b.password, rec["pw_hash"]):
-        failed = rec["failed"] + 1
+        failed = (rec.get("failed") or 0) + 1
         locked = time.time() + LOCK_SECONDS if failed >= MAX_ATTEMPTS else 0
-        db.execute("UPDATE users SET failed = %s, locked_until = %s WHERE username = %s", (0 if locked else failed, locked, name))
+        locked_dt = datetime.fromtimestamp(locked, tz=timezone.utc) if locked else None
+        db.execute("UPDATE users SET failed = %s, locked_until = %s WHERE username = %s", (0 if locked else failed, locked_dt, name))
         logger.warning(f"[АУДИТ ОШИБКА] Неверный пароль для '{name}'")
         raise HTTPException(401, "Неверный логин или пароль.")
 
@@ -444,8 +562,9 @@ def login_tg_request(b: TgLoginReqIn):
     rec = db.execute("SELECT * FROM users WHERE username = %s", (name,), "one")
     if not rec:
         raise HTTPException(404, "Учётная запись с таким логином не найдена.")
-    if rec["locked_until"] > time.time():
-        raise HTTPException(429, f"Аккаунт заблокирован. Подождите {int(rec['locked_until'] - time.time()) + 1} сек.")
+    lock_ts = rec["locked_until"].timestamp() if hasattr(rec.get("locked_until"), "timestamp") else float(rec.get("locked_until") or 0)
+    if lock_ts > time.time():
+        raise HTTPException(429, f"Аккаунт заблокирован. Подождите {int(lock_ts - time.time()) + 1} сек.")
     if not rec.get("tg_enc"):
         raise HTTPException(400, "К этому аккаунту не привязан Telegram. Войдите по паролю и привяжите его в профиле.")
     cid = send_2fa_code(name, rec, "tg_login")
@@ -473,17 +592,15 @@ def register(b: RegisterIn):
 
     has_admin = db.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1", (), "one") is not None
     if has_admin:
-        exp = invites.get(norm_code(b.invite_code))
-        if not exp or exp < time.time():
+        if not consume_invite_code(b.invite_code, name):
             raise HTTPException(403, "Нужен действительный код приглашения от администратора.")
-        invites.pop(norm_code(b.invite_code), None)
         role = "user"
     else:
         role = "admin"
 
     rec_code = new_recovery_code()
     db.execute(
-        "INSERT INTO users (username, role, pw_hash, rec_hash) VALUES (%s, %s, %s, %s)",
+        "INSERT INTO users (username, role, pw_hash, rec_hash, has_password) VALUES (%s, %s, %s, %s, TRUE)",
         (name, role, hash_secret(b.password), hash_secret(norm_code(rec_code)))
     )
     logger.info(f"[РЕГИСТРАЦИЯ] Зарегистрирован сотрудник '{name}' (Роль: {role})")
@@ -500,16 +617,10 @@ def reset_by_recovery(b: ResetCodeIn):
         logger.warning(f"[СБРОС ПАРОЛЯ] Неудачная попытка сброса по коду для '{name}'")
         raise HTTPException(400, "Неверный логин или резервный код.")
     new_rec = new_recovery_code()
-    try:
-        db.execute(
-            "UPDATE users SET pw_hash = %s, rec_hash = %s, failed = 0, locked_until = 0, has_password = TRUE WHERE username = %s",
-            (hash_secret(b.new_password), hash_secret(norm_code(new_rec)), name)
-        )
-    except Exception:
-        db.execute(
-            "UPDATE users SET pw_hash = %s, rec_hash = %s, failed = 0, locked_until = 0 WHERE username = %s",
-            (hash_secret(b.new_password), hash_secret(norm_code(new_rec)), name)
-        )
+    db.execute(
+        "UPDATE users SET pw_hash = %s, rec_hash = %s, failed = 0, locked_until = NULL, has_password = TRUE WHERE username = %s",
+        (hash_secret(b.new_password), hash_secret(norm_code(new_rec)), name)
+    )
     drop_sessions(name)
     logger.warning(f"[СБРОС ПАРОЛЯ] Пароль для '{name}' сброшен по резервному коду")
     return {"new_recovery_code": new_rec}
@@ -530,10 +641,7 @@ def reset_tg_confirm(b: ResetTgConfirmIn):
     if len(b.new_password) < MIN_PASSWORD:
         raise HTTPException(400, f"Новый пароль должен быть не короче {MIN_PASSWORD} символов.")
     name = verify_2fa_code(b.challenge_id, b.code, "reset")
-    try:
-        db.execute("UPDATE users SET pw_hash = %s, failed = 0, locked_until = 0, has_password = TRUE WHERE username = %s", (hash_secret(b.new_password), name))
-    except Exception:
-        db.execute("UPDATE users SET pw_hash = %s, failed = 0, locked_until = 0 WHERE username = %s", (hash_secret(b.new_password), name))
+    db.execute("UPDATE users SET pw_hash = %s, failed = 0, locked_until = NULL, has_password = TRUE WHERE username = %s", (hash_secret(b.new_password), name))
     drop_sessions(name)
     logger.warning(f"[СБРОС ПАРОЛЯ] Пароль для '{name}' сброшен через Telegram 2FA")
     return {"status": "ok"}
@@ -572,13 +680,10 @@ def change_password(b: ChangePassIn, u=Depends(current_user)):
         db.execute("UPDATE users SET pw_hash = %s WHERE username = %s", (hash_secret(b.new_password), u["name"]))
         logger.info(f"[БЕЗОПАСНОСТЬ] Пользователь '{u['name']}' сменил пароль")
     else:
-        try:
-            db.execute(
-                "UPDATE users SET pw_hash = %s, has_password = TRUE WHERE username = %s",
-                (hash_secret(b.new_password), u["name"]),
-            )
-        except Exception:
-            db.execute("UPDATE users SET pw_hash = %s WHERE username = %s", (hash_secret(b.new_password), u["name"]))
+        db.execute(
+            "UPDATE users SET pw_hash = %s, has_password = TRUE WHERE username = %s",
+            (hash_secret(b.new_password), u["name"]),
+        )
         logger.info(f"[БЕЗОПАСНОСТЬ] Пользователь '{u['name']}' задал локальный пароль для Google-аккаунта")
 
     return {"status": "ok"}
@@ -712,7 +817,8 @@ def google_callback(code: str = "", state: str = "", error: str = ""):
             rec = db.execute("SELECT * FROM users WHERE google_sub = %s", (sub,), "one")
             if not rec:
                 return popup_html({"type": "google_oauth", "ok": False, "error": f"Аккаунт {email} не привязан ни к одному сотруднику."})
-            if rec["locked_until"] > time.time():
+            lock_ts = rec["locked_until"].timestamp() if hasattr(rec.get("locked_until"), "timestamp") else float(rec.get("locked_until") or 0)
+            if lock_ts > time.time():
                 return popup_html({"type": "google_oauth", "ok": False, "error": "Учётная запись временно заблокирована."})
             db.execute("UPDATE users SET failed = 0 WHERE username = %s", (rec["username"],))
             logger.info(f"[GOOGLE OAUTH] Прямой вход сотрудника '{rec['username']}' ({email})")
@@ -723,14 +829,6 @@ def google_callback(code: str = "", state: str = "", error: str = ""):
             if db.execute("SELECT 1 FROM users WHERE google_sub = %s", (sub,), "one"):
                 return popup_html({"type": "google_oauth", "ok": False, "error": "Этот Google аккаунт уже зарегистрирован."})
             has_admin = db.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1", (), "one") is not None
-            if has_admin:
-                exp = invites.get(norm_code(st["invite_code"]))
-                if not exp or exp < time.time():
-                    return popup_html({"type": "google_oauth", "ok": False, "error": "Неверный или просроченный код приглашения."})
-                invites.pop(norm_code(st["invite_code"]), None)
-                role = "user"
-            else:
-                role = "admin"
 
             custom_login = st.get("desired_username") or ""
             custom_pass = st.get("desired_password") or ""
@@ -748,19 +846,20 @@ def google_callback(code: str = "", state: str = "", error: str = ""):
                     uname = f"{base_login}{i}"
                     i += 1
 
+            if has_admin:
+                if not consume_invite_code(st["invite_code"], uname):
+                    return popup_html({"type": "google_oauth", "ok": False, "error": "Неверный или просроченный код приглашения."})
+                role = "user"
+            else:
+                role = "admin"
+
             has_pw = bool(custom_pass and len(custom_pass) >= MIN_PASSWORD)
             raw_secret = custom_pass if has_pw else secrets.token_urlsafe(24)
             rec_code = new_recovery_code()
-            try:
-                db.execute(
-                    "INSERT INTO users (username, role, pw_hash, rec_hash, google_sub, google_email, has_password) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                    (uname, role, hash_secret(raw_secret), hash_secret(norm_code(rec_code)), sub, email, has_pw)
-                )
-            except Exception:
-                db.execute(
-                    "INSERT INTO users (username, role, pw_hash, rec_hash, google_sub, google_email) VALUES (%s, %s, %s, %s, %s, %s)",
-                    (uname, role, hash_secret(raw_secret), hash_secret(norm_code(rec_code)), sub, email)
-                )
+            db.execute(
+                "INSERT INTO users (username, role, pw_hash, rec_hash, google_sub, google_email, has_password) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (uname, role, hash_secret(raw_secret), hash_secret(norm_code(rec_code)), sub, email, has_pw)
+            )
             logger.info(f"[GOOGLE РЕГИСТРАЦИЯ] Зарегистрирован '{uname}' через Google ({email}, роль: {role})")
             sess = start_session(uname)
             return popup_html({"type": "google_oauth", "ok": True, "mode": "register", "session": sess, "recovery_code": rec_code})
@@ -778,19 +877,23 @@ def unlink_google(u=Depends(current_user)):
 
 @app.get("/api/menu")
 def get_menu(u=Depends(current_user)):
-    rows = db.execute("SELECT * FROM menu ORDER BY id", (), "all")
+    rows = db.execute("SELECT * FROM menu WHERE is_active IS DISTINCT FROM FALSE ORDER BY id", (), "all")
     for r in rows:
         r["price"] = float(r["price"])
     return rows
 
 @app.post("/api/menu")
 def add_menu(b: MenuIn, u=Depends(require_manager)):
+    cat_name = b.category.strip() or "Прочее"
+    cat_id = ensure_category(cat_name)
     row = db.execute(
-        "INSERT INTO menu (name, category, ingredients, price, discount, stock) VALUES (%s, %s, %s, %s, 0, %s) RETURNING *",
-        (b.name.strip(), b.category.strip(), b.ingredients.strip(), b.price, b.stock), "one"
+        "INSERT INTO menu (name, category_id, category, ingredients, price, discount, stock, is_active) VALUES (%s, %s, %s, %s, %s, 0, %s, TRUE) RETURNING *",
+        (b.name.strip(), cat_id, cat_name, b.ingredients.strip(), b.price, b.stock), "one"
     )
     if row:
         row["price"] = float(row["price"])
+        if b.stock > 0:
+            record_stock_movement(row["id"], b.stock, "stock_in", u["name"])
     logger.info(f"[МЕНЮ] '{u['name']}' добавил блюдо '{b.name}' ({b.price} тг)")
     return row
 
@@ -804,14 +907,19 @@ def set_discount(item_id: int, b: DiscountIn, u=Depends(require_manager)):
 
 @app.patch("/api/menu/{item_id}/stock")
 def set_stock(item_id: int, b: StockIn, u=Depends(require_manager)):
-    row = db.execute("UPDATE menu SET stock = %s WHERE id = %s RETURNING id", (b.stock, item_id), "one")
-    if not row:
+    cur_row = db.execute("SELECT stock FROM menu WHERE id = %s", (item_id,), "one")
+    if not cur_row:
         raise HTTPException(404, "Позиция в меню не найдена.")
+    delta = b.stock - int(cur_row["stock"] or 0)
+    db.execute("UPDATE menu SET stock = %s WHERE id = %s", (b.stock, item_id))
+    if delta != 0:
+        record_stock_movement(item_id, delta, "stock_in" if delta > 0 else "adjustment", u["name"])
     logger.info(f"[СКЛАД] '{u['name']}' обновил остаток ID #{item_id} до {b.stock}")
     return {"status": "ok"}
 
 @app.delete("/api/menu/{item_id}")
 def delete_menu(item_id: int, u=Depends(require_manager)):
+    db.execute("DELETE FROM stock_movements WHERE menu_item_id = %s", (item_id,))
     db.execute("DELETE FROM menu WHERE id = %s", (item_id,))
     logger.warning(f"[МЕНЮ] '{u['name']}' удалил позицию ID #{item_id}")
     return {"status": "ok"}
@@ -844,15 +952,17 @@ def create_order(b: OrderIn, u=Depends(current_user)):
         lines.append({"id": iid, "name": row["name"], "qty": q, "price": pr})
 
     table_name = b.table.strip() or ("На вынос" if b.type == "На вынос" else "Стол №1")
+    table_id = ensure_table(table_name, b.type)
     summary = ", ".join(f"{l['name']} x{l['qty']}" for l in lines)
     total = round(total, 2)
 
     for l in lines:
         db.execute("UPDATE menu SET stock = stock - %s WHERE id = %s", (l["qty"], l["id"]))
+        record_stock_movement(l["id"], -l["qty"], "sale", u["name"])
 
     order = db.execute(
-        "INSERT INTO orders (table_name, type, items, total, payment, status, waiter) VALUES (%s, %s, %s, %s, %s, 'Новый', %s) RETURNING id",
-        (table_name, b.type, summary, total, b.payment, u["name"]), "one"
+        "INSERT INTO orders (table_id, table_name, type, items, total, payment, status, waiter) VALUES (%s, %s, %s, %s, %s, %s, 'Новый', %s) RETURNING id",
+        (table_id, table_name, b.type, summary, total, b.payment, u["name"]), "one"
     )
     oid = order["id"]
     for l in lines:
@@ -860,6 +970,7 @@ def create_order(b: OrderIn, u=Depends(current_user)):
             "INSERT INTO order_items (order_id, menu_item_id, name, qty, price) VALUES (%s, %s, %s, %s, %s)",
             (oid, l["id"], l["name"], l["qty"], l["price"])
         )
+    record_order_status_history(oid, "Новый", "Новый", u["name"])
 
     logger.info(f"[КАССА] Кассир '{u['name']}' оформил заказ #{oid} на {total} тг ({b.payment})")
     return {"id": oid, "total": total}
@@ -877,12 +988,15 @@ def update_order_status(order_id: int, b: StatusIn, u=Depends(current_user)):
         items = db.execute("SELECT menu_item_id, qty FROM order_items WHERE order_id = %s", (order_id,), "all")
         for it in items:
             db.execute("UPDATE menu SET stock = stock + %s WHERE id = %s", (it["qty"], it["menu_item_id"]))
+            record_stock_movement(it["menu_item_id"], it["qty"], "return", u["name"])
     elif prev_status == "Отменен" and b.status != "Отменен":
         items = db.execute("SELECT menu_item_id, qty FROM order_items WHERE order_id = %s", (order_id,), "all")
         for it in items:
             db.execute("UPDATE menu SET stock = GREATEST(stock - %s, 0) WHERE id = %s", (it["qty"], it["menu_item_id"]))
+            record_stock_movement(it["menu_item_id"], -it["qty"], "sale", u["name"])
 
     db.execute("UPDATE orders SET status = %s WHERE id = %s", (b.status, order_id))
+    record_order_status_history(order_id, prev_status, b.status, u["name"])
     logger.info(f"[ЗАКАЗ] Статус заказа #{order_id} изменён с '{prev_status}' на '{b.status}' ({u['name']})")
     return {"status": "ok"}
 
@@ -893,6 +1007,9 @@ def delete_order(order_id: int, u=Depends(require_manager)):
         items = db.execute("SELECT menu_item_id, qty FROM order_items WHERE order_id = %s", (order_id,), "all")
         for it in items:
             db.execute("UPDATE menu SET stock = stock + %s WHERE id = %s", (it["qty"], it["menu_item_id"]))
+            record_stock_movement(it["menu_item_id"], it["qty"], "return", u["name"])
+    db.execute("DELETE FROM order_status_history WHERE order_id = %s", (order_id,))
+    db.execute("DELETE FROM order_items WHERE order_id = %s", (order_id,))
     db.execute("DELETE FROM orders WHERE id = %s", (order_id,))
     logger.warning(f"[ЗАКАЗ] Менеджер '{u['name']}' удалил заказ #{order_id}")
     return {"status": "ok"}
@@ -922,6 +1039,11 @@ def delete_user(name: str, u=Depends(require_admin)):
     if not rec or rec["role"] == "admin" or n == u["name"]:
         raise HTTPException(409, "Нельзя удалить администратора или самого себя.")
     db.execute("UPDATE orders SET waiter = %s WHERE waiter = %s", (u["name"], n))
+    db.execute("UPDATE audit_logs SET actor = %s WHERE actor = %s", (u["name"], n))
+    db.execute("UPDATE stock_movements SET actor = %s WHERE actor = %s", (u["name"], n))
+    db.execute("UPDATE order_status_history SET changed_by = %s WHERE changed_by = %s", (u["name"], n))
+    db.execute("UPDATE invite_codes SET created_by = %s WHERE created_by = %s", (u["name"], n))
+    db.execute("UPDATE invite_codes SET used_by = %s WHERE used_by = %s", (u["name"], n))
     db.execute("DELETE FROM users WHERE username = %s", (n,))
     drop_sessions(n)
     logger.warning(f"[БЕЗОПАСНОСТЬ] Админ '{u['name']}' удалил сотрудника '{n}'")
@@ -929,9 +1051,12 @@ def delete_user(name: str, u=Depends(require_admin)):
 
 @app.post("/api/admin/invites")
 def make_invite(u=Depends(require_admin)):
-    purge()
     code = new_recovery_code()
-    invites[norm_code(code)] = time.time() + INVITE_TTL
+    expires_at = utc_now() + timedelta(seconds=INVITE_TTL)
+    db.execute(
+        "INSERT INTO invite_codes (code_hash, role, created_by, expires_at) VALUES (%s, 'user', %s, %s)",
+        (hash_secret(norm_code(code)), u["name"], expires_at),
+    )
     logger.info(f"[БЕЗОПАСНОСТЬ] Админ '{u['name']}' сгенерировал инвайт-код")
     return {"code": code}
 
@@ -1019,12 +1144,14 @@ async def restore_logs_json(request: Request, u=Depends(require_admin)):
 
     db.execute("DELETE FROM audit_logs")
     for item in entries:
+        raw_actor = item.get("actor")
+        valid_actor = raw_actor if raw_actor and db.execute("SELECT 1 FROM users WHERE username = %s", (raw_actor,), "one") else None
         db.execute(
             "INSERT INTO audit_logs (created_at, level, actor, category, message) VALUES (%s, %s, %s, %s, %s)",
             (
-                item.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                item.get("created_at") or utc_now(),
                 (item.get("level") or "INFO")[:16],
-                (item.get("actor") or "system")[:64],
+                valid_actor,
                 (item.get("category") or "АУДИТ")[:64],
                 item.get("message") or "",
             ),
@@ -1045,16 +1172,34 @@ def export_json(u=Depends(require_admin)):
             "tg_enc": r.get("tg_enc", ""),
             "google_sub": r.get("google_sub"),
             "google_email": r.get("google_email"),
+            "failed": r.get("failed", 0),
+            "locked_until": r["locked_until"].isoformat() if hasattr(r.get("locked_until"), "isoformat") else r.get("locked_until"),
             "has_password": bool(r.get("has_password", True)) if "has_password" in r else True,
         }
         for r in users
     ]
-    menu = db.execute("SELECT id, name, category, ingredients, price::float, discount, stock FROM menu ORDER BY id", (), "all")
-    orders = db.execute("SELECT id, table_name, type, items, total::float, payment, status, waiter, created_at::text FROM orders ORDER BY id", (), "all")
+    categories = db.execute("SELECT id, name, sort_order, color FROM categories ORDER BY id", (), "all")
+    dining_tables = db.execute("SELECT id, label, seats, zone, status FROM dining_tables ORDER BY id", (), "all")
+    menu = db.execute("SELECT id, name, category_id, category, ingredients, price::float, discount, stock, is_active FROM menu ORDER BY id", (), "all")
+    orders = db.execute("SELECT id, table_id, table_name, type, items, total::float, payment, status, waiter, created_at::text FROM orders ORDER BY id", (), "all")
     order_items = db.execute("SELECT id, order_id, menu_item_id, name, qty, price::float FROM order_items ORDER BY id", (), "all")
-    data_block = {"users": clean_users, "menu": menu, "orders": orders, "order_items": order_items}
+    order_status_history = db.execute("SELECT id, order_id, old_status, new_status, changed_by, changed_at::text FROM order_status_history ORDER BY id", (), "all")
+    stock_movements = db.execute("SELECT id, menu_item_id, delta, reason, actor, created_at::text FROM stock_movements ORDER BY id", (), "all")
+    invite_codes = db.execute("SELECT id, code_hash, role, created_by, expires_at::text, used_by, used_at::text FROM invite_codes ORDER BY id", (), "all")
+
+    data_block = {
+        "users": clean_users,
+        "categories": categories,
+        "dining_tables": dining_tables,
+        "menu": menu,
+        "orders": orders,
+        "order_items": order_items,
+        "order_status_history": order_status_history,
+        "stock_movements": stock_movements,
+        "invite_codes": invite_codes,
+    }
     snapshot = {
-        "version": 4,
+        "version": 5,
         "engine": "PostgreSQL (Supabase)",
         "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "integrity_hmac_sha256": compute_integrity_hmac(data_block),
@@ -1078,37 +1223,65 @@ async def restore_json(request: Request, u=Depends(require_admin)):
         logger.error(f"[ЦЕЛОСТНОСТЬ НАРУШЕНА] Админ '{u['name']}' попытался загрузить изменённый файл бэкапа!")
         raise HTTPException(400, "ОШИБКА ЦЕЛОСТНОСТИ: Контрольная сумма HMAC-SHA256 не совпадает! Файл был модифицирован.")
 
+    db.execute("DELETE FROM order_status_history")
     db.execute("DELETE FROM order_items")
+    db.execute("DELETE FROM stock_movements")
     db.execute("DELETE FROM orders")
     db.execute("DELETE FROM menu")
+    db.execute("DELETE FROM dining_tables")
+    db.execute("DELETE FROM categories")
+    db.execute("DELETE FROM invite_codes")
     db.execute("DELETE FROM users")
 
-    for r in data_block["users"]:
-        try:
-            db.execute(
-                "INSERT INTO users (username, role, pw_hash, rec_hash, tg_enc, google_sub, google_email, has_password) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                (r["username"], r["role"], r["pw_hash"], r["rec_hash"], r.get("tg_enc", ""), r.get("google_sub"), r.get("google_email"), r.get("has_password", True))
-            )
-        except Exception:
-            db.execute(
-                "INSERT INTO users (username, role, pw_hash, rec_hash, tg_enc, google_sub, google_email) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (r["username"], r["role"], r["pw_hash"], r["rec_hash"], r.get("tg_enc", ""), r.get("google_sub"), r.get("google_email"))
-            )
-    for m in data_block["menu"]:
+    for r in data_block.get("users", []):
         db.execute(
-            "INSERT INTO menu (id, name, category, ingredients, price, discount, stock) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            (m["id"], m["name"], m["category"], m["ingredients"], m["price"], m["discount"], m["stock"])
+            "INSERT INTO users (username, role, pw_hash, rec_hash, tg_enc, google_sub, google_email, failed, locked_until, has_password) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (r["username"], r["role"], r["pw_hash"], r["rec_hash"], r.get("tg_enc", ""), r.get("google_sub"), r.get("google_email"), r.get("failed", 0), r.get("locked_until"), r.get("has_password", True))
         )
-    for o in data_block["orders"]:
+    for c in data_block.get("categories", []):
         db.execute(
-            "INSERT INTO orders (id, table_name, type, items, total, payment, status, waiter, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (o["id"], o["table_name"], o["type"], o["items"], o["total"], o["payment"], o["status"], o["waiter"], o["created_at"])
+            "INSERT INTO categories (id, name, sort_order, color) VALUES (%s, %s, %s, %s)",
+            (c["id"], c["name"], c.get("sort_order", 0), c.get("color", "#B9A4F5"))
+        )
+    for t in data_block.get("dining_tables", []):
+        db.execute(
+            "INSERT INTO dining_tables (id, label, seats, zone, status) VALUES (%s, %s, %s, %s, %s)",
+            (t["id"], t["label"], t.get("seats", 4), t.get("zone", "Основной зал"), t.get("status", "free"))
+        )
+    for m in data_block.get("menu", []):
+        cat_id = m.get("category_id") or ensure_category(m.get("category", "Прочее"))
+        db.execute(
+            "INSERT INTO menu (id, name, category_id, category, ingredients, price, discount, stock, is_active) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (m["id"], m["name"], cat_id, m["category"], m["ingredients"], m["price"], m["discount"], m["stock"], m.get("is_active", True))
+        )
+    for o in data_block.get("orders", []):
+        tbl_id = o.get("table_id") or ensure_table(o["table_name"], o.get("type", "В заведении"))
+        db.execute(
+            "INSERT INTO orders (id, table_id, table_name, type, items, total, payment, status, waiter, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (o["id"], tbl_id, o["table_name"], o["type"], o["items"], o["total"], o["payment"], o["status"], o["waiter"], o["created_at"])
         )
     for oi in data_block.get("order_items", []):
         db.execute(
             "INSERT INTO order_items (id, order_id, menu_item_id, name, qty, price) VALUES (%s, %s, %s, %s, %s, %s)",
             (oi["id"], oi["order_id"], oi["menu_item_id"], oi["name"], oi["qty"], oi["price"])
         )
+    for h in data_block.get("order_status_history", []):
+        db.execute(
+            "INSERT INTO order_status_history (id, order_id, old_status, new_status, changed_by, changed_at) VALUES (%s, %s, %s, %s, %s, %s)",
+            (h["id"], h["order_id"], h["old_status"], h["new_status"], h.get("changed_by"), h.get("changed_at"))
+        )
+    for sm in data_block.get("stock_movements", []):
+        db.execute(
+            "INSERT INTO stock_movements (id, menu_item_id, delta, reason, actor, created_at) VALUES (%s, %s, %s, %s, %s, %s)",
+            (sm["id"], sm["menu_item_id"], sm["delta"], sm["reason"], sm.get("actor"), sm.get("created_at"))
+        )
+    for ic in data_block.get("invite_codes", []):
+        db.execute(
+            "INSERT INTO invite_codes (id, code_hash, role, created_by, expires_at, used_by, used_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (ic["id"], ic["code_hash"], ic["role"], ic.get("created_by"), ic.get("expires_at"), ic.get("used_by"), ic.get("used_at"))
+        )
+
+    seed_reference_tables()
     logger.warning(f"[ВОССТАНОВЛЕНИЕ] БД успешно восстановлена из проверенного бэкапа ({u['name']})")
     return {"status": "ok"}
 
