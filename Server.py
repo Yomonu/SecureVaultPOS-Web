@@ -1207,7 +1207,7 @@ def export_bak(u=Depends(require_admin)):
             "google_sub": r.get("google_sub"),
             "google_email": r.get("google_email"),
             "failed": r.get("failed", 0),
-            "locked_until": r["locked_until"].isoformat() if hasattr(r.get("locked_until"), "isoformat") else r.get("locked_until"),
+            "locked_until": r["locked_until"].isoformat() if hasattr(r.get("locked_until"), "isoformat") and r.get("locked_until") else r.get("locked_until"),
             "has_password": bool(r.get("has_password", True)) if "has_password" in r else True,
         }
         for r in users
@@ -1265,68 +1265,79 @@ async def restore_bak(request: Request, u=Depends(require_admin)):
         logger.error(f"[ЦЕЛОСТНОСТЬ НАРУШЕНА] Админ '{u['name']}' попытался загрузить изменённый файл бэкапа!")
         raise HTTPException(400, "ОШИБКА ЦЕЛОСТНОСТИ: Контрольная сумма HMAC-SHA256 не совпадает! Файл был модифицирован.")
 
-    db.execute("DELETE FROM order_status_history")
-    db.execute("DELETE FROM order_items")
-    db.execute("DELETE FROM stock_movements")
-    db.execute("DELETE FROM orders")
-    db.execute("DELETE FROM menu")
-    db.execute("DELETE FROM dining_tables")
-    db.execute("DELETE FROM categories")
-    db.execute("DELETE FROM invite_codes")
-    db.execute("DELETE FROM users")
+    try:
+        db.execute("DELETE FROM order_status_history")
+        db.execute("DELETE FROM order_items")
+        db.execute("DELETE FROM stock_movements")
+        db.execute("DELETE FROM orders")
+        db.execute("DELETE FROM menu")
+        db.execute("DELETE FROM dining_tables")
+        db.execute("DELETE FROM categories")
+        db.execute("DELETE FROM invite_codes")
+        db.execute("DELETE FROM users")
 
-    for r in data_block.get("users", []):
-        db.execute(
-            "INSERT INTO users (username, role, pw_hash, rec_hash, tg_enc, google_sub, google_email, failed, locked_until, has_password) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (r["username"], r["role"], r["pw_hash"], r["rec_hash"], r.get("tg_enc", ""), r.get("google_sub"), r.get("google_email"), r.get("failed", 0), r.get("locked_until"), r.get("has_password", True))
-        )
-    for c in data_block.get("categories", []):
-        db.execute(
-            "INSERT INTO categories (id, name, sort_order, color) VALUES (%s, %s, %s, %s)",
-            (c["id"], c["name"], c.get("sort_order", 0), c.get("color", "#B9A4F5"))
-        )
-    for t in data_block.get("dining_tables", []):
-        db.execute(
-            "INSERT INTO dining_tables (id, label, seats, zone, status) VALUES (%s, %s, %s, %s, %s)",
-            (t["id"], t["label"], t.get("seats", 4), t.get("zone", "Основной зал"), t.get("status", "free"))
-        )
-    for m in data_block.get("menu", []):
-        cat_id = m.get("category_id") or ensure_category(m.get("category", "Прочее"))
-        db.execute(
-            "INSERT INTO menu (id, name, category_id, category, ingredients, price, discount, stock, is_active) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (m["id"], m["name"], cat_id, m["category"], m["ingredients"], m["price"], m["discount"], m["stock"], m.get("is_active", True))
-        )
-    for o in data_block.get("orders", []):
-        tbl_id = o.get("table_id") or ensure_table(o["table_name"], o.get("type", "В заведении"))
-        db.execute(
-            "INSERT INTO orders (id, table_id, table_name, type, items, total, payment, status, waiter, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (o["id"], tbl_id, o["table_name"], o["type"], o["items"], o["total"], o["payment"], o["status"], o["waiter"], o["created_at"])
-        )
-    for oi in data_block.get("order_items", []):
-        db.execute(
-            "INSERT INTO order_items (id, order_id, menu_item_id, name, qty, price) VALUES (%s, %s, %s, %s, %s, %s)",
-            (oi["id"], oi["order_id"], oi["menu_item_id"], oi["name"], oi["qty"], oi["price"])
-        )
-    for h in data_block.get("order_status_history", []):
-        db.execute(
-            "INSERT INTO order_status_history (id, order_id, old_status, new_status, changed_by, changed_at) VALUES (%s, %s, %s, %s, %s, %s)",
-            (h["id"], h["order_id"], h["old_status"], h["new_status"], h.get("changed_by"), h.get("changed_at"))
-        )
-    for sm in data_block.get("stock_movements", []):
-        db.execute(
-            "INSERT INTO stock_movements (id, menu_item_id, delta, reason, actor, created_at) VALUES (%s, %s, %s, %s, %s, %s)",
-            (sm["id"], sm["menu_item_id"], sm["delta"], sm["reason"], sm.get("actor"), sm.get("created_at"))
-        )
-    for ic in data_block.get("invite_codes", []):
-        db.execute(
-            "INSERT INTO invite_codes (id, code_hash, role, created_by, expires_at, used_by, used_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            (ic["id"], ic["code_hash"], ic["role"], ic.get("created_by"), ic.get("expires_at"), ic.get("used_by"), ic.get("used_at"))
-        )
+        for r in data_block.get("users", []):
+            locked_val = r.get("locked_until") or None
+            db.execute(
+                "INSERT INTO users (username, role, pw_hash, rec_hash, tg_enc, google_sub, google_email, failed, locked_until, has_password) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::timestamptz, %s)",
+                (r["username"], r["role"], r["pw_hash"], r["rec_hash"], r.get("tg_enc", ""), r.get("google_sub"), r.get("google_email"), r.get("failed", 0), locked_val, r.get("has_password", True))
+            )
+        for c in data_block.get("categories", []):
+            db.execute(
+                "INSERT INTO categories (id, name, sort_order, color) VALUES (%s, %s, %s, %s)",
+                (c["id"], c["name"], c.get("sort_order", 0), c.get("color", "#B9A4F5"))
+            )
+        for t in data_block.get("dining_tables", []):
+            db.execute(
+                "INSERT INTO dining_tables (id, label, seats, zone, status) VALUES (%s, %s, %s, %s, %s)",
+                (t["id"], t["label"], t.get("seats", 4), t.get("zone", "Основной зал"), t.get("status", "free"))
+            )
+        for m in data_block.get("menu", []):
+            cat_id = m.get("category_id") or ensure_category(m.get("category", "Прочее"))
+            db.execute(
+                "INSERT INTO menu (id, name, category_id, category, ingredients, price, discount, stock, is_active) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (m["id"], m["name"], cat_id, m["category"], m["ingredients"], m["price"], m["discount"], m["stock"], m.get("is_active", True))
+            )
+        for o in data_block.get("orders", []):
+            tbl_id = o.get("table_id") or ensure_table(o["table_name"], o.get("type", "В заведении"))
+            created_val = o.get("created_at") or utc_now().isoformat()
+            db.execute(
+                "INSERT INTO orders (id, table_id, table_name, type, items, total, payment, status, waiter, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::timestamptz)",
+                (o["id"], tbl_id, o["table_name"], o["type"], o["items"], o["total"], o["payment"], o["status"], o["waiter"], created_val)
+            )
+        for oi in data_block.get("order_items", []):
+            db.execute(
+                "INSERT INTO order_items (id, order_id, menu_item_id, name, qty, price) VALUES (%s, %s, %s, %s, %s, %s)",
+                (oi["id"], oi["order_id"], oi["menu_item_id"], oi["name"], oi["qty"], oi["price"])
+            )
+        for h in data_block.get("order_status_history", []):
+            changed_val = h.get("changed_at") or utc_now().isoformat()
+            db.execute(
+                "INSERT INTO order_status_history (id, order_id, old_status, new_status, changed_by, changed_at) VALUES (%s, %s, %s, %s, %s, %s::timestamptz)",
+                (h["id"], h["order_id"], h["old_status"], h["new_status"], h.get("changed_by"), changed_val)
+            )
+        for sm in data_block.get("stock_movements", []):
+            sm_created = sm.get("created_at") or utc_now().isoformat()
+            db.execute(
+                "INSERT INTO stock_movements (id, menu_item_id, delta, reason, actor, created_at) VALUES (%s, %s, %s, %s, %s, %s::timestamptz)",
+                (sm["id"], sm["menu_item_id"], sm["delta"], sm["reason"], sm.get("actor"), sm_created)
+            )
+        for ic in data_block.get("invite_codes", []):
+            exp_val = ic.get("expires_at") or None
+            used_val = ic.get("used_at") or None
+            db.execute(
+                "INSERT INTO invite_codes (id, code_hash, role, created_by, expires_at, used_by, used_at) VALUES (%s, %s, %s, %s, %s::timestamptz, %s, %s::timestamptz)",
+                (ic["id"], ic["code_hash"], ic["role"], ic.get("created_by"), exp_val, ic.get("used_by"), used_val)
+            )
 
-    for tbl in ("categories", "dining_tables", "menu", "orders", "order_items", "order_status_history", "stock_movements", "invite_codes"):
-        db.execute(f"SELECT setval(pg_get_serial_sequence('public.{tbl}', 'id'), COALESCE((SELECT MAX(id) FROM public.{tbl}), 1), true)")
+        for tbl in ("categories", "dining_tables", "menu", "orders", "order_items", "order_status_history", "stock_movements", "invite_codes"):
+            db.execute(f"SELECT setval(pg_get_serial_sequence('public.{tbl}', 'id'), COALESCE((SELECT MAX(id) FROM public.{tbl}), 1), true)")
 
-    seed_reference_tables()
+        seed_reference_tables()
+    except Exception as e:
+        logger.error(f"[ВОССТАНОВЛЕНИЕ ОШИБКА] {e}")
+        raise HTTPException(500, f"Ошибка при записи данных в БД: {e}")
+
     logger.warning(f"[ВОССТАНОВЛЕНИЕ] БД успешно восстановлена из .bak ({u['name']})")
     return {"status": "ok"}
 
