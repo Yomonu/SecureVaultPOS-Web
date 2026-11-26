@@ -784,6 +784,18 @@ def reply_admin_support_ticket(ticket_id: int, body: SupportMessageIn, u=Depends
         return support_thread(ticket)
 
 
+@app.delete("/api/admin/support/{ticket_id}")
+def delete_support_ticket(ticket_id: int, u=Depends(require_admin)):
+    deleted = db.execute(
+        "DELETE FROM gurman_support.tickets WHERE id = %s RETURNING id",
+        (ticket_id,),
+        "one",
+    )
+    if deleted:
+        logger.info(f"[ОБРАЩЕНИЯ] Админ '{u['name']}' удалил обращение #{ticket_id}")
+    return {"status": "ok"}
+
+
 @app.post("/api/auth/login")
 def login(b: LoginIn):
     name = normalize(b.username)
