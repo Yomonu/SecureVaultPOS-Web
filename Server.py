@@ -284,10 +284,10 @@ def record_order_status_history(order_id: int, old_status: str, new_status: str,
     )
 
 
-def consume_invite_code(raw_code: str, username: str) -> bool:
+def validate_invite_code(raw_code: str) -> Optional[int]:
     clean = norm_code(raw_code)
     if not clean:
-        return False
+        return None
     now = utc_now()
     rows = db.execute(
         "SELECT id, code_hash FROM invite_codes WHERE used_at IS NULL AND (expires_at IS NULL OR expires_at > %s)",
@@ -296,14 +296,29 @@ def consume_invite_code(raw_code: str, username: str) -> bool:
     )
     for r in rows:
         if verify_secret(clean, r["code_hash"]):
-            updated = db.execute(
-                "UPDATE invite_codes SET used_by = %s, used_at = %s WHERE id = %s AND used_at IS NULL RETURNING id",
-                (username, now, r["id"]),
-                "one",
-            )
-            if updated:
-                return True
-    return False
+            return r["id"]
+    return None
+
+
+def mark_invite_used(invite_id: int, username: str):
+    now = utc_now()
+    db.execute(
+        "UPDATE invite_codes SET used_by = %s, used_at = %s WHERE id = %s AND used_at IS NULL",
+        (username, now, invite_id),
+    )
+
+
+def consume_invite_code(raw_code: str, username: str) -> bool:
+    inv_id = validate_invite_code(raw_code)
+    if inv_id is None:
+        return False
+    now = utc_now()
+    updated = db.execute(
+        "UPDATE invite_codes SET used_by = %s, used_at = %s WHERE id = %s AND used_at IS NULL RETURNING id",
+        (username, now, inv_id),
+        "one",
+    )
+    return bool(updated)
 
 
 def purge():
@@ -601,8 +616,10 @@ def register(b: RegisterIn):
         raise HTTPException(400, "Этот логин уже занят.")
 
     has_admin = db.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1", (), "one") is not None
+    invite_id: Optional[int] = None
     if has_admin:
-        if not consume_invite_code(b.invite_code, name):
+        invite_id = validate_invite_code(b.invite_code)
+        if invite_id is None:
             raise HTTPException(403, "Нужен действительный код приглашения от администратора.")
         role = "user"
     else:
@@ -613,6 +630,8 @@ def register(b: RegisterIn):
         "INSERT INTO users (username, role, pw_hash, rec_hash, has_password) VALUES (%s, %s, %s, %s, TRUE)",
         (name, role, hash_secret(b.password), hash_secret(norm_code(rec_code)))
     )
+    if invite_id is not None:
+        mark_invite_used(invite_id, name)
     logger.info(f"[РЕГИСТРАЦИЯ] Зарегистрирован сотрудник '{name}' (Роль: {role})")
     return {"recovery_code": rec_code, "role": role}
 
@@ -856,8 +875,10 @@ def google_callback(code: str = "", state: str = "", error: str = ""):
                     uname = f"{base_login}{i}"
                     i += 1
 
+            invite_id: Optional[int] = None
             if has_admin:
-                if not consume_invite_code(st["invite_code"], uname):
+                invite_id = validate_invite_code(st["invite_code"])
+                if invite_id is None:
                     return popup_html({"type": "google_oauth", "ok": False, "error": "Неверный или просроченный код приглашения."})
                 role = "user"
             else:
@@ -870,6 +891,8 @@ def google_callback(code: str = "", state: str = "", error: str = ""):
                 "INSERT INTO users (username, role, pw_hash, rec_hash, google_sub, google_email, has_password) VALUES (%s, %s, %s, %s, %s, %s, %s)",
                 (uname, role, hash_secret(raw_secret), hash_secret(norm_code(rec_code)), sub, email, has_pw)
             )
+            if invite_id is not None:
+                mark_invite_used(invite_id, uname)
             logger.info(f"[GOOGLE РЕГИСТРАЦИЯ] Зарегистрирован '{uname}' через Google ({email}, роль: {role})")
             sess = start_session(uname)
             return popup_html({"type": "google_oauth", "ok": True, "mode": "register", "session": sess, "recovery_code": rec_code})
