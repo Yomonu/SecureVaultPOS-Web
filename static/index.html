@@ -383,8 +383,8 @@ input,select{background:var(--surface-2)}
         <div class="row">
           <button onclick="makeInvite()">Создать инвайт-код</button>
           <button class="ok" onclick="downloadFile('/api/admin/backup/excel','GurmanPOS_Report.xlsx')">Отчёт Excel</button>
-          <button class="sec" onclick="downloadFile('/api/admin/backup/json','GurmanPOS_SignedBackup.json')">Бэкап JSON с HMAC</button>
-          <label class="sec" style="height:44px;display:inline-flex;align-items:center;padding:0 16px;border:1px solid var(--line);border-radius:10px;cursor:pointer;font-weight:600;background:var(--surface-2)">Восстановить из JSON<input type="file" accept=".json" style="display:none" onchange="restoreBackup(this)"></label>
+          <button class="sec" onclick="downloadFile('/api/admin/backup/bak','GurmanPOS_Backup.bak')">Бэкап БД (.bak)</button>
+          <label class="sec" style="height:44px;display:inline-flex;align-items:center;padding:0 16px;border:1px solid var(--line);border-radius:10px;cursor:pointer;font-weight:600;background:var(--surface-2)">Восстановить из .bak<input type="file" accept=".bak,.json" style="display:none" onchange="restoreBackup(this)"></label>
         </div>
       </div>
       <div class="panel flat" style="margin-top:16px"><h3 style="margin-bottom:10px">Сотрудники</h3><div class="tbl"><table class="rt">
@@ -879,8 +879,8 @@ async function downloadFile(url, filename) {
 async function restoreBackup(input) {
   const file = input.files[0]; if (!file) return;
   try {
-    await api('POST', '/api/admin/restore/json', JSON.parse(await file.text()));
-    toast('База восстановлена, подпись HMAC-SHA256 верна');
+    await api('POST', '/api/admin/restore/bak', JSON.parse(await file.text()));
+    toast('База восстановлена из .bak, подпись HMAC-SHA256 верна');
     loadMenu(); loadOrders(); loadUsers(); loadLogs();
   } catch (e) { fail(e); }
   input.value = '';
