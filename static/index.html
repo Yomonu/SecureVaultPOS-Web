@@ -290,7 +290,7 @@ input,select{background:var(--surface-2)}
           </div>
           <div id="cart-box" class="lines"></div>
           <div class="total"><span>К оплате</span><b id="cart-total">0 ₸</b></div>
-          <button class="ok" style="height:50px" onclick="submitOrder()">Оформить заказ</button>
+          <button id="btn-submit-order" class="ok" style="height:50px" onclick="submitOrder()">Оформить заказ</button>
         </div>
       </div>
       <button class="cartbar" onclick="toggleReceipt()"><span id="cb-count">Чек пуст</span><span id="cb-total">0 ₸</span></button>
@@ -349,11 +349,11 @@ input,select{background:var(--surface-2)}
             <div class="row"><button class="google" onclick="startGoogleOAuth('link')">Привязать Google</button><button id="btn-gg-unlink" class="danger hidden" onclick="unlinkGoogle()">Отвязать</button></div>
           </div>
           <div class="panel">
-            <h3 style="margin-bottom:12px">Смена пароля</h3>
+            <h3 id="pw-card-title" style="margin-bottom:12px">Смена пароля</h3>
             <div class="stack">
               <input id="cp-old" type="password" placeholder="Текущий пароль" autocomplete="current-password">
               <input id="cp-new" type="password" placeholder="Новый пароль (от 8 символов)" autocomplete="new-password">
-              <button onclick="changePass()">Сохранить пароль</button>
+              <button id="btn-save-pw" onclick="changePass()">Сохранить пароль</button>
             </div>
           </div>
         </div>
@@ -554,18 +554,22 @@ function doLogout() {
 function closeModal(id) { $(id).classList.add('hidden'); }
 
 /* ---------- Каркас ---------- */
-function initApp() {
-  if (!TOKEN || !USER) return;
-  $('auth-view').classList.add('hidden'); $('app-view').classList.remove('hidden');
+function applyRoleUI() {
+  if (!USER) return;
   ['sb-user','mb-user'].forEach(i => $(i).textContent = USER.username);
   ['sb-role','mb-role'].forEach(i => $(i).textContent = USER.role.toUpperCase());
   const isMgr = ['admin','manager'].includes(USER.role), isAdm = USER.role === 'admin';
   $('menu-add-card').classList.toggle('hidden', !isMgr);
   $('nav-admin').classList.toggle('hidden', !isAdm);
   $('nav-logs').classList.toggle('hidden', !isAdm);
+}
+function initApp() {
+  if (!TOKEN || !USER) return;
+  $('auth-view').classList.add('hidden'); $('app-view').classList.remove('hidden');
+  applyRoleUI();
   nav('pos');
   loadMenu(); loadOrders(); loadProfile();
-  if (isAdm) { loadUsers(); loadLogs(); }
+  if (USER.role === 'admin') { loadUsers(); loadLogs(); }
 }
 function nav(sec) {
   SECTIONS.forEach(s => $('sec-' + s).classList.toggle('hidden', s !== sec));
@@ -579,6 +583,11 @@ function nav(sec) {
 async function loadProfile() {
   try {
     const me = await api('GET', '/api/me');
+    if (USER && USER.role !== me.role) {
+      USER.role = me.role;
+      localStorage.setItem('sv_user', JSON.stringify(USER));
+      applyRoleUI();
+    }
     $('tg-status-box').innerHTML = me.tg_linked
       ? '<span class="badge b-ok">Telegram привязан, вход защищён</span>'
       : '<span class="badge b-warn">Telegram не привязан</span>';
@@ -586,6 +595,11 @@ async function loadProfile() {
     $('google-status-box').innerHTML = me.google_email
       ? `<span class="badge b-acc">Привязан: ${esc(me.google_email)}</span>` : '<span class="badge">Не привязан</span>';
     $('btn-gg-unlink').classList.toggle('hidden', !me.google_email);
+
+    const hasPw = me.has_password !== false;
+    $('cp-old').classList.toggle('hidden', !hasPw);
+    $('pw-card-title').textContent = hasPw ? 'Смена пароля' : 'Установка пароля';
+    $('btn-save-pw').textContent = hasPw ? 'Сохранить пароль' : 'Задать пароль';
   } catch (e) { fail(e); }
 }
 async function generateTgQR() {
@@ -607,8 +621,13 @@ async function unlinkGoogle() {
 }
 async function changePass() {
   try {
-    await api('POST', '/api/me/password', { old_password: $('cp-old').value, new_password: $('cp-new').value });
-    $('cp-old').value = ''; $('cp-new').value = ''; toast('Пароль обновлён');
+    await api('POST', '/api/me/password', {
+      old_password: $('cp-old').classList.contains('hidden') ? '' : $('cp-old').value,
+      new_password: $('cp-new').value
+    });
+    $('cp-old').value = ''; $('cp-new').value = '';
+    toast('Пароль сохранён');
+    loadProfile();
   } catch (e) { fail(e); }
 }
 
@@ -697,11 +716,14 @@ function toggleReceipt(force) {
 }
 async function submitOrder() {
   if (!CART.length) return toast('Добавьте хотя бы одно блюдо', true);
+  const btn = $('btn-submit-order');
+  if (btn.disabled) return;
+  btn.disabled = true;
   try {
     await api('POST', '/api/orders', { table: $('ord-table').value, type: $('ord-type').value, payment: $('ord-pay').value, items: CART.map(c => ({ id: c.id, qty: c.qty })) });
     CART = []; renderCart(); toggleReceipt(false); toast('Заказ оформлен');
     loadOrders(); loadMenu();
-  } catch (e) { fail(e); }
+  } catch (e) { fail(e); } finally { btn.disabled = false; }
 }
 
 function renderMenu() {
