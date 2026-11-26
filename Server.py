@@ -1266,6 +1266,13 @@ async def restore_bak(request: Request, u=Depends(require_admin)):
         raise HTTPException(400, "ОШИБКА ЦЕЛОСТНОСТИ: Контрольная сумма HMAC-SHA256 не совпадает! Файл был модифицирован.")
 
     try:
+        # Снимаем ссылки на users перед удалением/перезаписью пользователей
+        db.execute("UPDATE audit_logs SET actor = NULL WHERE actor IS NOT NULL")
+        db.execute("UPDATE stock_movements SET actor = NULL WHERE actor IS NOT NULL")
+        db.execute("UPDATE order_status_history SET changed_by = NULL WHERE changed_by IS NOT NULL")
+        db.execute("UPDATE invite_codes SET created_by = NULL WHERE created_by IS NOT NULL")
+        db.execute("UPDATE invite_codes SET used_by = NULL WHERE used_by IS NOT NULL")
+
         db.execute("DELETE FROM order_status_history")
         db.execute("DELETE FROM order_items")
         db.execute("DELETE FROM stock_movements")
@@ -1329,6 +1336,18 @@ async def restore_bak(request: Request, u=Depends(require_admin)):
                 "INSERT INTO invite_codes (id, code_hash, role, created_by, expires_at, used_by, used_at) VALUES (%s, %s, %s, %s, %s::timestamptz, %s, %s::timestamptz)",
                 (ic["id"], ic["code_hash"], ic["role"], ic.get("created_by"), exp_val, ic.get("used_by"), used_val)
             )
+
+        # Восстанавливаем actor в audit_logs там, где логин теперь существует в users
+        db.execute(
+            """
+            UPDATE audit_logs a
+            SET actor = u.username
+            FROM users u
+            WHERE a.actor IS NULL
+              AND substring(a.message from '''([A-Za-z0-9_.-]{3,32})''') IS NOT NULL
+              AND lower(substring(a.message from '''([A-Za-z0-9_.-]{3,32})''')) = u.username
+            """
+        )
 
         for tbl in ("categories", "dining_tables", "menu", "orders", "order_items", "order_status_history", "stock_movements", "invite_codes"):
             db.execute(f"SELECT setval(pg_get_serial_sequence('public.{tbl}', 'id'), COALESCE((SELECT MAX(id) FROM public.{tbl}), 1), true)")
