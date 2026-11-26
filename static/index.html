@@ -74,7 +74,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .nav-item:hover{background:var(--surface-2);color:var(--ink)}
 .nav-item.active{background:var(--accent-soft);color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
 .who{border-top:1px solid var(--line);padding-top:14px}
-.who b{color:var(--ink);display:block;margin-bottom:6px}
+.who b{color:var(--ink);display:block;margin-bottom:6px;overflow-wrap:anywhere}
 .who .badge{background:var(--surface-2);color:var(--ink)}
 .who button{width:100%;margin-top:12px;background:transparent;color:var(--muted);border-color:var(--line)}
 .who button:hover{background:var(--surface-2);color:var(--ink)}
@@ -165,7 +165,7 @@ td select.st-sel{height:36px;padding:0 10px;font-size:13px;border-radius:8px;wid
   .main{padding:16px 14px calc(var(--nav-h) + 90px)}
   h2{font-size:15px}
   .mtop{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
-  .mtop .u{display:flex;align-items:center;gap:8px;font-weight:600}
+  .mtop .u{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;font-weight:600;overflow-wrap:anywhere}
   .pos{grid-template-columns:1fr}
   .dishes{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
   .cartbar{position:fixed;left:12px;right:12px;bottom:calc(var(--nav-h) + 10px + env(safe-area-inset-bottom));z-index:40;height:54px;justify-content:space-between;box-shadow:0 8px 20px rgba(0,0,0,.25);border-radius:14px}
@@ -219,6 +219,7 @@ input,select{background:var(--surface-2)}
         <div class="or">или</div>
         <button type="button" class="tg" onclick="doTgLoginRequest()">Код из Telegram</button>
         <button type="button" class="google" onclick="startGoogleOAuth('login')">Войти через Google</button>
+        <button type="button" class="sec" onclick="setAuthMode('reset', $('atab-reset'))">Забыли логин или пароль?</button>
       </form>
 
       <form id="form-register" class="stack hidden" autocomplete="off" onsubmit="event.preventDefault();doRegister();">
@@ -233,10 +234,19 @@ input,select{background:var(--surface-2)}
       <form id="form-reset" class="stack hidden" autocomplete="off" onsubmit="event.preventDefault();doResetRecovery();">
         <input id="rst-user" placeholder="Логин" autocomplete="username">
         <input id="rst-newpass" type="password" placeholder="Новый пароль (от 8 символов)" autocomplete="new-password">
-        <input id="rst-code" placeholder="Резервный код XXXX-XXXX-XXXX" autocomplete="off">
-        <button type="submit">Сбросить по резервному коду</button>
+        <input id="rst-code" placeholder="Резервный или временный код" autocomplete="off">
+        <button type="submit">Сбросить по коду</button>
         <div class="or">или</div>
         <button type="button" class="sec" onclick="doResetTgRequest()">Получить код в Telegram</button>
+        <details class="small">
+          <summary>Не помню логин</summary>
+          <div class="stack" style="margin-top:10px">
+            <p id="recover-via-telegram" class="muted">Если Telegram привязан, отправьте <code>/login</code> боту в личном чате. Он пришлёт ваш логин.</p>
+            <a id="recover-bot-link" class="hidden" target="_blank" rel="noopener" style="color:var(--accent)">Открыть бота в Telegram</a>
+            <button type="button" class="google" onclick="startGoogleOAuth('login')">Войти через привязанный Google</button>
+            <p class="muted">Если привязок нет, попросите администратора напомнить логин и выдать временный код.</p>
+          </div>
+        </details>
       </form>
     </div>
   </div>
@@ -345,7 +355,17 @@ input,select{background:var(--surface-2)}
 
     <!-- Профиль -->
     <section id="sec-security" class="hidden">
-      <div class="head"><div><h2>Безопасность</h2><p>Telegram, Google и пароль</p></div></div>
+      <div class="head"><div><h2>Профиль</h2><p>Имя и способы входа</p></div></div>
+      <div class="panel" style="margin-bottom:16px">
+        <p class="muted small" style="margin-bottom:12px">Логин <strong id="profile-login"></strong></p>
+        <form class="stack" onsubmit="event.preventDefault();saveProfileName()">
+          <label for="profile-name">Имя</label>
+          <div class="row">
+            <input id="profile-name" maxlength="80" autocomplete="name" placeholder="Как к вам обращаться" style="max-width:360px">
+            <button id="save-profile-name" type="submit">Сохранить имя</button>
+          </div>
+        </form>
+      </div>
       <div class="two">
         <div class="panel">
           <h3>Подтверждение входа через Telegram</h3>
@@ -396,7 +416,7 @@ input,select{background:var(--surface-2)}
         </div>
       </div>
       <div class="panel flat" style="margin-top:16px"><h3 style="margin-bottom:10px">Сотрудники</h3><div class="tbl"><table class="rt">
-        <thead><tr><th>Логин</th><th>Роль</th><th>Telegram</th><th>Google</th><th></th></tr></thead>
+        <thead><tr><th>Имя</th><th>Логин</th><th>Роль</th><th>Telegram</th><th>Google</th><th></th></tr></thead>
         <tbody id="users-body"></tbody></table></div></div>
     </section>
 
@@ -458,7 +478,7 @@ function toast(msg, err) {
 const fail = e => toast(e.message, true);
 
 function clearAllInputs() {
-  ['l-user','l-pass','r-user','r-pass','r-invite','g-reg-user','g-reg-pass','rst-user','rst-newpass','rst-code','m2fa-code','cp-old','cp-new','m-name','m-ing','m-price','menu-search','pos-search','log-s','log-e']
+  ['l-user','l-pass','r-user','r-pass','r-invite','g-reg-user','g-reg-pass','rst-user','rst-newpass','rst-code','m2fa-code','cp-old','cp-new','profile-name','m-name','m-ing','m-price','menu-search','pos-search','log-s','log-e']
     .forEach(id => { const el = $(id); if (el) el.value = ''; });
   $('ord-table').value = 'Стол №1'; $('m-stock').value = '30';
   CART = []; renderCart(); CAT = 'Все';
@@ -486,6 +506,16 @@ function setAuthMode(mode, btn) {
   $('form-' + mode).classList.remove('hidden');
   document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
+  if (mode === 'reset') loadRecoveryOptions();
+}
+async function loadRecoveryOptions() {
+  try {
+    const options = await api('GET', '/api/health');
+    const link = $('recover-bot-link');
+    link.classList.toggle('hidden', !options.telegram_bot_url);
+    $('recover-via-telegram').classList.toggle('hidden', !options.telegram_bot_url);
+    if (options.telegram_bot_url) link.href = options.telegram_bot_url;
+  } catch { /* The administrator and Google options remain available. */ }
 }
 function open2FA(title, desc, state) {
   PENDING_2FA = state;
@@ -610,7 +640,7 @@ function closeModal(id) { $(id).classList.add('hidden'); }
 
 /* ---------- Каркас ---------- */
 function applyRoleUI() {
-  ['sb-user','mb-user'].forEach(id => $(id).textContent = USER.username);
+  ['sb-user','mb-user'].forEach(id => $(id).textContent = USER.display_name || USER.username);
   ['sb-role','mb-role'].forEach(id => $(id).textContent = ROLE_LABELS[USER.role] || USER.role);
   const allowed = allowedSections();
   document.querySelectorAll('.nav-item').forEach(button =>
@@ -648,12 +678,14 @@ async function loadProfile() {
   try {
     const me = await api('GET', '/api/me');
     if (!USER || TOKEN !== token) return false;
-    if (USER.role !== me.role) {
-      USER.role = me.role;
-      localStorage.setItem('sv_user', JSON.stringify(USER));
-      applyRoleUI();
-      nav(document.body.dataset.sec);
-    }
+    const roleChanged = USER.role !== me.role;
+    USER.role = me.role;
+    USER.display_name = me.display_name;
+    localStorage.setItem('sv_user', JSON.stringify(USER));
+    applyRoleUI();
+    if (roleChanged) nav(document.body.dataset.sec);
+    $('profile-login').textContent = me.username;
+    $('profile-name').value = me.display_name;
     $('tg-status-box').innerHTML = me.tg_linked
       ? '<span class="badge b-ok">Telegram привязан, вход защищён</span>'
       : '<span class="badge b-warn">Telegram не привязан</span>';
@@ -668,6 +700,22 @@ async function loadProfile() {
     $('btn-save-pw').textContent = hasPw ? 'Сохранить пароль' : 'Задать пароль';
     return true;
   } catch (e) { fail(e); return false; }
+}
+async function saveProfileName() {
+  const token = TOKEN;
+  const button = $('save-profile-name');
+  button.disabled = true;
+  try {
+    const result = await api('PATCH', '/api/me', { display_name: $('profile-name').value });
+    if (!USER || TOKEN !== token) return;
+    USER.display_name = result.display_name;
+    localStorage.setItem('sv_user', JSON.stringify(USER));
+    $('profile-name').value = result.display_name;
+    applyRoleUI();
+    if (USER.role === 'admin') loadUsers();
+    toast('Имя сохранено');
+  } catch (e) { fail(e); }
+  finally { button.disabled = false; }
 }
 async function generateTgQR() {
   try {
@@ -871,6 +919,7 @@ async function loadUsers() {
   let users; try { users = await api('GET', '/api/admin/users'); } catch (e) { return fail(e); }
   $('users-body').innerHTML = users.map(u => `
     <tr>
+      <td data-l="Имя">${esc(u.display_name || "—")}</td>
       <td data-l="Логин"><strong>${esc(u.login)}</strong></td>
       <td data-l="Роль"><span class="badge b-acc">${esc(ROLE_LABELS[u.role] || u.role)}</span></td>
       <td data-l="Telegram">${u.tg ? '<span class="badge b-ok">Включён</span>' : '<span class="muted">Нет</span>'}</td>
@@ -878,8 +927,16 @@ async function loadUsers() {
       <td class="full">${u.role !== 'admin' ? `<div class="acts">
         <button class="sec sm" data-l="${esc(u.login)}" onclick="setRole(this.dataset.l,'manager')">Менеджер</button>
         <button class="sec sm" data-l="${esc(u.login)}" onclick="setRole(this.dataset.l,'user')">Кассир</button>
+        <button class="sec sm" data-l="${esc(u.login)}" onclick="issuePasswordReset(this.dataset.l)">Код для сброса</button>
         <button class="danger sm" data-l="${esc(u.login)}" onclick="delUser(this.dataset.l)">Удалить</button></div>` : '<span class="muted">Администратор</span>'}</td>
     </tr>`).join('');
+}
+async function issuePasswordReset(login) {
+  if (!confirm(`Выдать временный код для «${login}»? Сначала убедитесь, что запрос пришёл от этого сотрудника.`)) return;
+  try {
+    const result = await api('POST', `/api/admin/users/${encodeURIComponent(login)}/password-reset`);
+    prompt(`Передайте сотруднику логин «${result.login}» и код. На сайте нужно открыть вкладку «Пароль». Код действует ${result.expires_in / 60} мин.`, result.code);
+  } catch (e) { fail(e); }
 }
 async function setRole(login, role) { try { await api('PATCH', `/api/admin/users/${encodeURIComponent(login)}/role`, { role }); loadUsers(); } catch (e) { fail(e); } }
 async function delUser(login) { if (!confirm('Удалить сотрудника?')) return; try { await api('DELETE', `/api/admin/users/${encodeURIComponent(login)}`); loadUsers(); } catch (e) { fail(e); } }

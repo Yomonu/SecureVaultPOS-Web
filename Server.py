@@ -62,6 +62,7 @@ CODE_TRIES = 3
 LINK_TTL = 600
 SESSION_TTL = 8 * 3600
 INVITE_TTL = 24 * 3600
+STAFF_RESET_TTL = 15 * 60
 MIN_PASSWORD = 8
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,32}$")
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -375,6 +376,49 @@ def init_telegram_bot():
     except Exception as e:
         logger.error(f"[TELEGRAM] Ошибка инициализации бота: {e}")
 
+def handle_telegram_message(msg: dict):
+    chat = msg.get("chat") or {}
+    chat_id = chat.get("id")
+    if chat.get("type") != "private" or not chat_id or (msg.get("from") or {}).get("id") != chat_id:
+        return
+    parts = (msg.get("text") or "").split(maxsplit=1)
+    if not parts:
+        return
+    command = parts[0].removesuffix(f"@{bot_username}")
+
+    if command == "/login":
+        rows = db.execute("SELECT username, tg_enc FROM users WHERE COALESCE(tg_enc, '') <> '' ORDER BY username", (), "all")
+        logins = [row["username"] for row in rows if db.chat_id(row["tg_enc"]) == chat_id]
+        if logins:
+            reply = "Логины, привязанные к этому Telegram:\n" + "\n".join(logins)
+            reply += "\n\nНа сайте введите логин и нажмите «Код из Telegram» или сбросьте пароль на вкладке «Пароль»."
+        else:
+            reply = "К этому Telegram не привязана учётная запись Гурман POS."
+        tg_call("sendMessage", {"chat_id": chat_id, "text": reply})
+        return
+    if command != "/start":
+        return
+    if len(parts) == 1:
+        tg_call("sendMessage", {
+            "chat_id": chat_id,
+            "text": f"{APP_NAME}\nЧтобы узнать забытый логин, отправьте /login. Для привязки откройте профиль на сайте.",
+        })
+        return
+
+    with db.lock:
+        entry = link_tokens.pop(parts[1].strip(), None)
+        if entry and entry["expires"] >= time.time():
+            db.execute("UPDATE users SET tg_enc = %s WHERE username = %s", (db.enc(str(chat_id)), entry["name"]))
+        else:
+            entry = None
+    if not entry:
+        tg_call("sendMessage", {"chat_id": chat_id, "text": "Ссылка устарела. Сгенерируйте новый QR-код."})
+        return
+
+    logger.info(f"[2FA ПРИВЯЗКА] Пользователь '{entry['name']}' привязал Telegram (chat_id={chat_id})")
+    tg_call("sendMessage", {"chat_id": chat_id, "text": f"Telegram успешно привязан к учётной записи «{entry['name']}»."})
+
+
 def tg_poller():
     global tg_offset
     while True:
@@ -385,28 +429,10 @@ def tg_poller():
             updates = tg_call("getUpdates", {"offset": tg_offset, "timeout": 20, "allowed_updates": ["message"]})
             for upd in updates:
                 tg_offset = upd["update_id"] + 1
-                msg = upd.get("message") or {}
-                text = (msg.get("text") or "").strip()
-                chat_id = (msg.get("chat") or {}).get("id")
-                if not chat_id or not text.startswith("/start"):
-                    continue
-                parts = text.split(maxsplit=1)
-                if len(parts) < 2:
-                    tg_call("sendMessage", {"chat_id": chat_id, "text": f"{APP_NAME}\nОткройте привязку в личном кабинете."})
-                    continue
-                with db.lock:
-                    entry = link_tokens.pop(parts[1].strip(), None)
-                    if entry and entry["expires"] >= time.time():
-                        db.execute("UPDATE users SET tg_enc = %s WHERE username = %s", (db.enc(str(chat_id)), entry["name"]))
-                    else:
-                        entry = None
-                if not entry:
-                    tg_call("sendMessage", {"chat_id": chat_id, "text": "Ссылка устарела. Сгенерируйте новый QR-код."})
-                    continue
-                logger.info(f"[2FA ПРИВЯЗКА] Пользователь '{entry['name']}' привязал Telegram (chat_id={chat_id})")
-                tg_call("sendMessage", {"chat_id": chat_id, "text": f"Telegram успешно привязан к учётной записи «{entry['name']}»."})
+                handle_telegram_message(upd.get("message") or {})
         except Exception:
             time.sleep(3)
+
 
 def send_2fa_code(name: str, rec: dict, kind: str) -> str:
     cid = db.chat_id(rec.get("tg_enc", ""))
@@ -522,6 +548,9 @@ class ResetTgConfirmIn(BaseModel):
     code: str
     new_password: str
 
+class ProfileIn(BaseModel):
+    display_name: str = Field(max_length=80)
+
 class ChangePassIn(BaseModel):
     old_password: str = ""
     new_password: str
@@ -577,6 +606,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 @app.on_event("startup")
 def on_startup():
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(80) NOT NULL DEFAULT ''")
     seed_reference_tables()
     init_telegram_bot()
     threading.Thread(target=tg_poller, daemon=True).start()
@@ -588,6 +618,7 @@ def health():
         "status": "ok",
         "db": "PostgreSQL (Supabase)",
         "tg_enabled": bool(TG_BOT_TOKEN and bot_username),
+        "telegram_bot_url": f"https://t.me/{bot_username}" if TG_BOT_TOKEN and bot_username else None,
         "google_enabled": bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET),
     }
 
@@ -690,8 +721,16 @@ def reset_by_recovery(b: ResetCodeIn):
     name = normalize(b.username)
     if len(b.new_password) < MIN_PASSWORD:
         raise HTTPException(400, f"Новый пароль должен быть не короче {MIN_PASSWORD} символов.")
+    purge()
     rec = db.execute("SELECT * FROM users WHERE username = %s", (name,), "one")
-    if not rec or not verify_secret(norm_code(b.recovery_code), rec["rec_hash"]):
+    code = norm_code(b.recovery_code)
+    staff_reset_key = f"staff-reset:{name}"
+    staff_reset = challenges.get(staff_reset_key)
+    staff_reset_valid = (
+        rec and rec["role"] != "admin" and staff_reset
+        and hmac.compare_digest(hashlib.sha256(code.encode()).hexdigest(), staff_reset["hash"])
+    )
+    if not rec or not (staff_reset_valid or verify_secret(code, rec["rec_hash"])):
         logger.warning(f"[СБРОС ПАРОЛЯ] Неудачная попытка сброса по коду для '{name}'")
         raise HTTPException(400, "Неверный логин или резервный код.")
     new_rec = new_recovery_code()
@@ -700,7 +739,10 @@ def reset_by_recovery(b: ResetCodeIn):
         (hash_secret(b.new_password), hash_secret(norm_code(new_rec)), name)
     )
     drop_sessions(name)
-    logger.warning(f"[СБРОС ПАРОЛЯ] Пароль для '{name}' сброшен по резервному коду")
+    for token in [token for token, entry in challenges.items() if entry["name"] == name]:
+        challenges.pop(token, None)
+    method = "по временному коду администратора" if staff_reset_valid else "по резервному коду"
+    logger.warning(f"[СБРОС ПАРОЛЯ] Пароль для '{name}' сброшен {method}")
     return {"new_recovery_code": new_rec}
 
 
@@ -721,6 +763,7 @@ def reset_tg_confirm(b: ResetTgConfirmIn):
     name = verify_2fa_code(b.challenge_id, b.code, "reset")
     db.execute("UPDATE users SET pw_hash = %s, failed = 0, locked_until = NULL, has_password = TRUE WHERE username = %s", (hash_secret(b.new_password), name))
     drop_sessions(name)
+    challenges.pop(f"staff-reset:{name}", None)
     logger.warning(f"[СБРОС ПАРОЛЯ] Пароль для '{name}' сброшен через Telegram 2FA")
     return {"status": "ok"}
 
@@ -737,11 +780,21 @@ def get_me(u=Depends(current_user)):
     rec = u["rec"]
     return {
         "username": u["name"],
+        "display_name": rec["display_name"],
         "role": u["role"],
         "tg_linked": bool(rec.get("tg_enc")),
         "google_email": rec.get("google_email") or "",
         "has_password": bool(rec.get("has_password", True)) if "has_password" in rec else True,
     }
+
+
+@app.patch("/api/me")
+def update_profile(b: ProfileIn, u=Depends(current_user)):
+    display_name = b.display_name.strip()
+    if display_name and not display_name.isprintable():
+        raise HTTPException(400, "Имя должно быть написано в одну строку.")
+    db.execute("UPDATE users SET display_name = %s WHERE username = %s", (display_name, u["name"]))
+    return {"display_name": display_name}
 
 
 @app.post("/api/me/password")
@@ -764,6 +817,7 @@ def change_password(b: ChangePassIn, u=Depends(current_user)):
         )
         logger.info(f"[БЕЗОПАСНОСТЬ] Пользователь '{u['name']}' задал локальный пароль для Google-аккаунта")
 
+    challenges.pop(f"staff-reset:{u['name']}", None)
     return {"status": "ok"}
 
 
@@ -1099,8 +1153,33 @@ def delete_order(order_id: int, u=Depends(require_manager)):
 
 @app.get("/api/admin/users")
 def list_users(u=Depends(require_admin)):
-    rows = db.execute("SELECT username, role, tg_enc, google_email FROM users ORDER BY created_at", (), "all")
-    return [{"login": r["username"], "role": r["role"], "tg": bool(r["tg_enc"]), "google_email": r["google_email"] or ""} for r in rows]
+    rows = db.execute("SELECT username, display_name, role, tg_enc, google_email FROM users ORDER BY created_at", (), "all")
+    return [
+        {"login": r["username"], "display_name": r["display_name"], "role": r["role"],
+         "tg": bool(r["tg_enc"]), "google_email": r["google_email"] or ""}
+        for r in rows
+    ]
+
+
+@app.post("/api/admin/users/{name}/password-reset")
+def issue_staff_password_reset(name: str, u=Depends(require_admin)):
+    name = normalize(name)
+    rec = db.execute("SELECT role FROM users WHERE username = %s", (name,), "one")
+    if not rec:
+        raise HTTPException(404, "Сотрудник не найден.")
+    if rec["role"] not in ("user", "manager"):
+        raise HTTPException(403, "Временный код можно выдать кассиру или менеджеру.")
+
+    purge()
+    code = secrets.token_hex(12).upper()
+    challenges[f"staff-reset:{name}"] = {
+        "name": name,
+        "kind": "staff_reset",
+        "hash": hashlib.sha256(code.encode()).hexdigest(),
+        "expires": time.time() + STAFF_RESET_TTL,
+    }
+    logger.warning(f"[СБРОС ПАРОЛЯ] Админ '{u['name']}' выдал временный код для '{name}'")
+    return {"login": name, "code": code, "expires_in": STAFF_RESET_TTL}
 
 @app.patch("/api/admin/users/{name}/role")
 def set_role(name: str, b: RoleIn, u=Depends(require_admin)):
@@ -1128,6 +1207,7 @@ def delete_user(name: str, u=Depends(require_admin)):
     db.execute("UPDATE invite_codes SET used_by = %s WHERE used_by = %s", (u["name"], n))
     db.execute("DELETE FROM users WHERE username = %s", (n,))
     drop_sessions(n)
+    challenges.pop(f"staff-reset:{n}", None)
     logger.warning(f"[БЕЗОПАСНОСТЬ] Админ '{u['name']}' удалил сотрудника '{n}'")
     return {"status": "ok"}
 
@@ -1266,7 +1346,7 @@ def export_bak(u=Depends(require_backup_admin)):
     with db.transaction(readonly=True):
         users = db.execute(
             """
-            SELECT username, role, pw_hash, rec_hash, tg_enc, google_sub, google_email,
+            SELECT username, display_name, role, pw_hash, rec_hash, tg_enc, google_sub, google_email,
                    failed, locked_until::text, has_password, created_at::text
             FROM users ORDER BY username
             """,
@@ -1344,8 +1424,14 @@ def replace_database(data_block: dict):
 
     for r in data_block["users"]:
         db.execute(
-            "INSERT INTO users (username, role, pw_hash, rec_hash, tg_enc, google_sub, google_email, failed, locked_until, has_password, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, CURRENT_TIMESTAMP))",
-            (r["username"], r["role"], r["pw_hash"], r["rec_hash"], r.get("tg_enc", ""), r.get("google_sub"), r.get("google_email"), r.get("failed", 0), r.get("locked_until"), r.get("has_password", True), r.get("created_at"))
+            """
+            INSERT INTO users (username, display_name, role, pw_hash, rec_hash, tg_enc, google_sub,
+                               google_email, failed, locked_until, has_password, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, CURRENT_TIMESTAMP))
+            """,
+            (r["username"], r.get("display_name", ""), r["role"], r["pw_hash"], r["rec_hash"],
+             r.get("tg_enc", ""), r.get("google_sub"), r.get("google_email"), r.get("failed", 0),
+             r.get("locked_until"), r.get("has_password", True), r.get("created_at")),
         )
     for c in data_block.get("categories", []):
         db.execute(
@@ -1453,11 +1539,13 @@ def export_excel(u=Depends(require_admin)):
     with db.transaction(readonly=True):
         df_orders = pd.read_sql_query("SELECT id, table_name AS Стол, type AS Тип, items AS Состав, total AS Сумма, payment AS Оплата, status AS Статус, waiter AS Кассир FROM orders", db.conn)
         df_menu = pd.read_sql_query("SELECT id, name AS Блюдо, category AS Категория, price AS Цена, discount AS Скидка, stock AS Остаток FROM menu", db.conn)
-        df_users = pd.read_sql_query("SELECT username AS Логин, role AS Роль, google_email AS Google FROM users", db.conn)
+        df_users = pd.read_sql_query("SELECT username AS Логин, display_name AS Имя, role AS Роль, google_email AS Google FROM users", db.conn)
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df_orders.to_excel(writer, sheet_name="Заказы", index=False)
         df_menu.to_excel(writer, sheet_name="Меню", index=False)
         df_users.to_excel(writer, sheet_name="Сотрудники", index=False)
+        for row in writer.sheets["Сотрудники"].iter_rows(min_row=2, min_col=2, max_col=2):
+            row[0].data_type = "s"  # Display names are plain text, including values starting with "=".
     output.seek(0)
     return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": "attachment; filename=GurmanPOS_Report.xlsx"})
