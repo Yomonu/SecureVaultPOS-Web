@@ -154,10 +154,12 @@ class DBAuditHandler(logging.Handler):
             msg = record.getMessage()
             cat_match = re.match(r"^\[([^\]]+)\]\s*", msg)
             category = cat_match.group(1) if cat_match else "АУДИТ"
+            actor_match = re.search(r"'([A-Za-z0-9_.-]{3,32})'", msg)
+            actor = actor_match.group(1) if actor_match else "system"
             ts = datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S")
             self._db.execute(
                 "INSERT INTO audit_logs (created_at, level, actor, category, message) VALUES (%s, %s, %s, %s, %s)",
-                (ts, record.levelname.ljust(7), "system", category[:64], msg),
+                (ts, record.levelname.ljust(7), actor[:64], category[:64], msg),
             )
         except Exception:
             pass
@@ -283,7 +285,7 @@ def verify_2fa_code(cid_token: str, code: str, expected_kind: str) -> str:
 def start_session(name: str) -> dict:
     token = secrets.token_urlsafe(32)
     sessions[token] = {"name": name, "expires": time.time() + SESSION_TTL}
-    rec = db.execute("SELECT role, tg_enc, google_email FROM users WHERE username = %s", (name,), "one")
+    rec = db.execute("SELECT * FROM users WHERE username = %s", (name,), "one")
     logger.info(f"[АУДИТ] Создана веб-сессия для '{name}' (Роль: {rec['role']})")
     return {
         "token": token,
@@ -291,6 +293,7 @@ def start_session(name: str) -> dict:
         "role": rec["role"],
         "tg_linked": bool(rec.get("tg_enc")),
         "google_email": rec.get("google_email") or "",
+        "has_password": bool(rec.get("has_password", True)) if "has_password" in rec else True,
     }
 
 def current_user(authorization: str = Header(default="")):
@@ -346,7 +349,7 @@ class ResetTgConfirmIn(BaseModel):
     new_password: str
 
 class ChangePassIn(BaseModel):
-    old_password: str
+    old_password: str = ""
     new_password: str
 
 class MenuIn(BaseModel):
@@ -497,10 +500,16 @@ def reset_by_recovery(b: ResetCodeIn):
         logger.warning(f"[СБРОС ПАРОЛЯ] Неудачная попытка сброса по коду для '{name}'")
         raise HTTPException(400, "Неверный логин или резервный код.")
     new_rec = new_recovery_code()
-    db.execute(
-        "UPDATE users SET pw_hash = %s, rec_hash = %s, failed = 0, locked_until = 0 WHERE username = %s",
-        (hash_secret(b.new_password), hash_secret(norm_code(new_rec)), name)
-    )
+    try:
+        db.execute(
+            "UPDATE users SET pw_hash = %s, rec_hash = %s, failed = 0, locked_until = 0, has_password = TRUE WHERE username = %s",
+            (hash_secret(b.new_password), hash_secret(norm_code(new_rec)), name)
+        )
+    except Exception:
+        db.execute(
+            "UPDATE users SET pw_hash = %s, rec_hash = %s, failed = 0, locked_until = 0 WHERE username = %s",
+            (hash_secret(b.new_password), hash_secret(norm_code(new_rec)), name)
+        )
     drop_sessions(name)
     logger.warning(f"[СБРОС ПАРОЛЯ] Пароль для '{name}' сброшен по резервному коду")
     return {"new_recovery_code": new_rec}
@@ -521,7 +530,10 @@ def reset_tg_confirm(b: ResetTgConfirmIn):
     if len(b.new_password) < MIN_PASSWORD:
         raise HTTPException(400, f"Новый пароль должен быть не короче {MIN_PASSWORD} символов.")
     name = verify_2fa_code(b.challenge_id, b.code, "reset")
-    db.execute("UPDATE users SET pw_hash = %s, failed = 0, locked_until = 0 WHERE username = %s", (hash_secret(b.new_password), name))
+    try:
+        db.execute("UPDATE users SET pw_hash = %s, failed = 0, locked_until = 0, has_password = TRUE WHERE username = %s", (hash_secret(b.new_password), name))
+    except Exception:
+        db.execute("UPDATE users SET pw_hash = %s, failed = 0, locked_until = 0 WHERE username = %s", (hash_secret(b.new_password), name))
     drop_sessions(name)
     logger.warning(f"[СБРОС ПАРОЛЯ] Пароль для '{name}' сброшен через Telegram 2FA")
     return {"status": "ok"}
@@ -542,17 +554,33 @@ def get_me(u=Depends(current_user)):
         "role": u["role"],
         "tg_linked": bool(rec.get("tg_enc")),
         "google_email": rec.get("google_email") or "",
+        "has_password": bool(rec.get("has_password", True)) if "has_password" in rec else True,
     }
 
 
 @app.post("/api/me/password")
 def change_password(b: ChangePassIn, u=Depends(current_user)):
-    if not verify_secret(b.old_password, u["rec"]["pw_hash"]):
-        raise HTTPException(400, "Текущий пароль введён неверно.")
     if len(b.new_password) < MIN_PASSWORD:
         raise HTTPException(400, f"Новый пароль должен быть не короче {MIN_PASSWORD} символов.")
-    db.execute("UPDATE users SET pw_hash = %s WHERE username = %s", (hash_secret(b.new_password), u["name"]))
-    logger.info(f"[БЕЗОПАСНОСТЬ] Пользователь '{u['name']}' сменил пароль")
+
+    rec = u["rec"]
+    has_pw = bool(rec.get("has_password", True)) if "has_password" in rec else True
+
+    if has_pw:
+        if not b.old_password or not verify_secret(b.old_password, rec["pw_hash"]):
+            raise HTTPException(400, "Текущий пароль введён неверно.")
+        db.execute("UPDATE users SET pw_hash = %s WHERE username = %s", (hash_secret(b.new_password), u["name"]))
+        logger.info(f"[БЕЗОПАСНОСТЬ] Пользователь '{u['name']}' сменил пароль")
+    else:
+        try:
+            db.execute(
+                "UPDATE users SET pw_hash = %s, has_password = TRUE WHERE username = %s",
+                (hash_secret(b.new_password), u["name"]),
+            )
+        except Exception:
+            db.execute("UPDATE users SET pw_hash = %s WHERE username = %s", (hash_secret(b.new_password), u["name"]))
+        logger.info(f"[БЕЗОПАСНОСТЬ] Пользователь '{u['name']}' задал локальный пароль для Google-аккаунта")
+
     return {"status": "ok"}
 
 
@@ -692,10 +720,16 @@ def google_callback(code: str = "", state: str = "", error: str = ""):
                 uname = f"{base_login}{i}"
                 i += 1
             rec_code = new_recovery_code()
-            db.execute(
-                "INSERT INTO users (username, role, pw_hash, rec_hash, google_sub, google_email) VALUES (%s, %s, %s, %s, %s, %s)",
-                (uname, role, hash_secret(secrets.token_urlsafe(24)), hash_secret(norm_code(rec_code)), sub, email)
-            )
+            try:
+                db.execute(
+                    "INSERT INTO users (username, role, pw_hash, rec_hash, google_sub, google_email, has_password) VALUES (%s, %s, %s, %s, %s, %s, FALSE)",
+                    (uname, role, hash_secret(secrets.token_urlsafe(24)), hash_secret(norm_code(rec_code)), sub, email)
+                )
+            except Exception:
+                db.execute(
+                    "INSERT INTO users (username, role, pw_hash, rec_hash, google_sub, google_email) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (uname, role, hash_secret(secrets.token_urlsafe(24)), hash_secret(norm_code(rec_code)), sub, email)
+                )
             logger.info(f"[GOOGLE РЕГИСТРАЦИЯ] Зарегистрирован '{uname}' через Google ({email}, роль: {role})")
             sess = start_session(uname)
             return popup_html({"type": "google_oauth", "ok": True, "mode": "register", "session": sess, "recovery_code": rec_code})
@@ -970,12 +1004,26 @@ async def restore_logs_json(request: Request, u=Depends(require_admin)):
 
 @app.get("/api/admin/backup/json")
 def export_json(u=Depends(require_admin)):
-    users = db.execute("SELECT username, role, pw_hash, rec_hash, tg_enc, google_sub, google_email FROM users", (), "all")
+    users = db.execute("SELECT * FROM users", (), "all")
+    clean_users = [
+        {
+            "username": r["username"],
+            "role": r["role"],
+            "pw_hash": r["pw_hash"],
+            "rec_hash": r["rec_hash"],
+            "tg_enc": r.get("tg_enc", ""),
+            "google_sub": r.get("google_sub"),
+            "google_email": r.get("google_email"),
+            "has_password": bool(r.get("has_password", True)) if "has_password" in r else True,
+        }
+        for r in users
+    ]
     menu = db.execute("SELECT id, name, category, ingredients, price::float, discount, stock FROM menu ORDER BY id", (), "all")
     orders = db.execute("SELECT id, table_name, type, items, total::float, payment, status, waiter, created_at::text FROM orders ORDER BY id", (), "all")
-    data_block = {"users": users, "menu": menu, "orders": orders}
+    order_items = db.execute("SELECT id, order_id, menu_item_id, name, qty, price::float FROM order_items ORDER BY id", (), "all")
+    data_block = {"users": clean_users, "menu": menu, "orders": orders, "order_items": order_items}
     snapshot = {
-        "version": 3,
+        "version": 4,
         "engine": "PostgreSQL (Supabase)",
         "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "integrity_hmac_sha256": compute_integrity_hmac(data_block),
@@ -1005,10 +1053,16 @@ async def restore_json(request: Request, u=Depends(require_admin)):
     db.execute("DELETE FROM users")
 
     for r in data_block["users"]:
-        db.execute(
-            "INSERT INTO users (username, role, pw_hash, rec_hash, tg_enc, google_sub, google_email) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            (r["username"], r["role"], r["pw_hash"], r["rec_hash"], r.get("tg_enc", ""), r.get("google_sub"), r.get("google_email"))
-        )
+        try:
+            db.execute(
+                "INSERT INTO users (username, role, pw_hash, rec_hash, tg_enc, google_sub, google_email, has_password) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (r["username"], r["role"], r["pw_hash"], r["rec_hash"], r.get("tg_enc", ""), r.get("google_sub"), r.get("google_email"), r.get("has_password", True))
+            )
+        except Exception:
+            db.execute(
+                "INSERT INTO users (username, role, pw_hash, rec_hash, tg_enc, google_sub, google_email) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (r["username"], r["role"], r["pw_hash"], r["rec_hash"], r.get("tg_enc", ""), r.get("google_sub"), r.get("google_email"))
+            )
     for m in data_block["menu"]:
         db.execute(
             "INSERT INTO menu (id, name, category, ingredients, price, discount, stock) VALUES (%s, %s, %s, %s, %s, %s, %s)",
@@ -1018,6 +1072,11 @@ async def restore_json(request: Request, u=Depends(require_admin)):
         db.execute(
             "INSERT INTO orders (id, table_name, type, items, total, payment, status, waiter, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (o["id"], o["table_name"], o["type"], o["items"], o["total"], o["payment"], o["status"], o["waiter"], o["created_at"])
+        )
+    for oi in data_block.get("order_items", []):
+        db.execute(
+            "INSERT INTO order_items (id, order_id, menu_item_id, name, qty, price) VALUES (%s, %s, %s, %s, %s, %s)",
+            (oi["id"], oi["order_id"], oi["menu_item_id"], oi["name"], oi["qty"], oi["price"])
         )
     logger.warning(f"[ВОССТАНОВЛЕНИЕ] БД успешно восстановлена из проверенного бэкапа ({u['name']})")
     return {"status": "ok"}
