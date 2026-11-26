@@ -496,7 +496,10 @@ input,select{background:var(--surface-2)}
       <div class="two">
         <div id="admin-support-list" class="panel support-ticket-list"></div>
         <section id="admin-support-thread" class="panel stack hidden">
-          <h3 id="admin-support-name"></h3>
+          <div class="support-title">
+            <h3 id="admin-support-name" style="overflow-wrap:anywhere;min-width:0"></h3>
+            <button type="button" class="danger sm" onclick="deleteAdminSupport(this)">Удалить обращение</button>
+          </div>
           <p class="muted small">Обращение может отправить любой посетитель. Перед выдачей кода сброса проверьте, кто написал.</p>
           <div id="admin-support-messages" class="support-messages" aria-label="Сообщения" role="log"></div>
           <form class="stack" onsubmit="event.preventDefault();replyAsAdmin(this)">
@@ -1167,6 +1170,25 @@ async function replyAsAdmin(form) {
       showAdminSupport(thread);
     }
     loadAdminSupport();
+  } catch (e) { fail(e); }
+  finally { button.disabled = false; }
+}
+
+async function deleteAdminSupport(button) {
+  const ticket = ADMIN_TICKET_ID, token = TOKEN;
+  if (!ticket || !confirm(`Удалить обращение №${ticket} и всю переписку? Отменить удаление будет нельзя.`)) return;
+  button.disabled = true;
+  try {
+    await api('DELETE', `/api/admin/support/${ticket}`);
+    if (TOKEN !== token) return;
+    if (ADMIN_TICKET_ID === ticket) {
+      ADMIN_TICKET_ID = 0;
+      $('admin-support-thread').classList.add('hidden');
+      $('admin-support-messages').replaceChildren();
+      $('admin-support-reply').value = '';
+    }
+    await loadAdminSupport();
+    toast('Обращение удалено');
   } catch (e) { fail(e); }
   finally { button.disabled = false; }
 }
