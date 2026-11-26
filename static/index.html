@@ -147,6 +147,23 @@ td select.st-sel{height:36px;padding:0 10px;font-size:13px;border-radius:8px;wid
 /* modal + toast */
 .modal-bg{position:fixed;inset:0;background:rgba(5,4,10,.78);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px}
 .modal{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:26px;width:100%;max-width:380px;text-align:center}
+.support-dialog{width:min(620px,calc(100% - 28px));max-height:calc(100dvh - 28px);overflow-y:auto;padding:20px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:16px}
+.support-dialog::backdrop{background:rgba(5,4,10,.78)}
+.support-title{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.support-dialog details summary{cursor:pointer;color:var(--accent)}
+.support-dialog details form{margin-top:10px}
+.support-message{width:100%;min-height:100px;resize:vertical;padding:10px 12px;font:inherit;color:var(--ink);background:var(--surface-2);border:1px solid var(--line);border-radius:10px}
+.support-message:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.support-messages{max-height:35dvh;overflow-y:auto;display:grid;gap:8px}
+.support-messages article{background:var(--surface-2);border-radius:10px;padding:10px 12px;overflow-wrap:anywhere}
+.support-messages article[data-sender="admin"]{border-left:3px solid var(--accent)}
+.support-messages p{white-space:pre-wrap}
+.support-messages header{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 10px;margin-bottom:4px}
+.support-status{color:var(--accent)}
+.support-status.error{color:var(--bad)}
+.support-ticket-list{display:grid;gap:8px}
+.support-ticket-list button{height:auto;min-height:44px;white-space:normal;overflow-wrap:anywhere;justify-content:space-between;text-align:left;padding:10px 12px}
+.support-ticket-list button[aria-current="true"]{border-color:var(--accent)}
 .toast{position:fixed;left:50%;bottom:calc(var(--nav-h) + 76px);transform:translateX(-50%);background:#2A2740;color:var(--ink);padding:12px 18px;border-radius:10px;font-size:14px;z-index:200;max-width:calc(100vw - 32px);box-shadow:0 8px 24px rgba(0,0,0,.25)}
 .toast.err{background:#4A2127;color:#FFD5D8}
 @media(min-width:900px){.toast{bottom:28px}}
@@ -220,6 +237,7 @@ input,select{background:var(--surface-2)}
         <button type="button" class="tg" onclick="doTgLoginRequest()">Код из Telegram</button>
         <button type="button" class="google" onclick="startGoogleOAuth('login')">Войти через Google</button>
         <button type="button" class="sec" onclick="setAuthMode('reset', $('atab-reset'))">Забыли логин или пароль?</button>
+        <button type="button" class="sec" onclick="openSupport()">Написать администратору</button>
       </form>
 
       <form id="form-register" class="stack hidden" autocomplete="off" onsubmit="event.preventDefault();doRegister();">
@@ -244,13 +262,59 @@ input,select{background:var(--surface-2)}
             <p id="recover-via-telegram" class="muted">Если Telegram привязан, отправьте <code>/login</code> боту в личном чате. Он пришлёт ваш логин.</p>
             <a id="recover-bot-link" class="hidden" target="_blank" rel="noopener" style="color:var(--accent)">Открыть бота в Telegram</a>
             <button type="button" class="google" onclick="startGoogleOAuth('login')">Войти через привязанный Google</button>
-            <p class="muted">Если привязок нет, попросите администратора напомнить логин и выдать временный код.</p>
+            <button type="button" class="sec" onclick="openSupport()">Написать администратору</button>
           </div>
         </details>
       </form>
     </div>
   </div>
 </div>
+
+<dialog id="support-dialog" class="support-dialog" aria-labelledby="support-title" onclose="clearSupport()" oncancel="if (SUPPORT_BUSY) event.preventDefault()">
+  <div class="stack">
+    <div class="support-title">
+      <h3 id="support-title">Связь с администратором</h3>
+      <button type="button" class="sec sm" onclick="$('support-dialog').close()">Закрыть</button>
+    </div>
+    <div id="support-entry" class="stack">
+      <form id="support-create" class="stack" onsubmit="event.preventDefault();submitSupport(this, '/api/support')">
+        <label for="support-name">Как к вам обращаться</label>
+        <input id="support-name" name="name" maxlength="80" required autocomplete="name">
+        <label for="support-text">Сообщение</label>
+        <textarea id="support-text" class="support-message" name="message" maxlength="2000" required></textarea>
+        <p class="muted small">Пароли и резервные коды в сообщении не нужны.</p>
+        <button type="submit">Отправить обращение</button>
+      </form>
+      <details id="support-existing">
+        <summary>Открыть переписку по коду</summary>
+        <form id="support-open" class="stack" onsubmit="event.preventDefault();submitSupport(this, '/api/support/thread')">
+          <label for="support-enter-code">Код обращения</label>
+          <div class="row">
+            <input id="support-enter-code" name="code" required maxlength="32" autocomplete="off" spellcheck="false">
+            <button type="submit" class="sec">Открыть</button>
+          </div>
+        </form>
+      </details>
+    </div>
+    <section id="support-thread" class="stack hidden" aria-label="Переписка с администратором">
+      <label for="support-code">Сохраните код. Он нужен, чтобы вернуться к переписке.</label>
+      <div class="row">
+        <input id="support-code" readonly spellcheck="false">
+        <button type="button" class="sec" onclick="copySupportCode()">Скопировать код</button>
+      </div>
+      <div id="support-messages" class="support-messages" aria-label="Сообщения" role="log"></div>
+      <form id="support-reply" class="stack" onsubmit="event.preventDefault();submitSupport(this, '/api/support/reply')">
+        <label for="support-reply-text">Ваш ответ</label>
+        <textarea id="support-reply-text" class="support-message" name="message" maxlength="2000" required></textarea>
+        <div class="row">
+          <button type="submit">Отправить</button>
+          <button type="button" class="sec" onclick="requestSupport('/api/support/thread', {code: SUPPORT_CODE})">Проверить ответ</button>
+        </div>
+      </form>
+    </section>
+    <p id="support-status" class="small support-status" role="status"></p>
+  </div>
+</dialog>
 
 <!-- ============ МОДАЛКА ЛОГИНА И ПАРОЛЯ ПРИ РЕГИСТРАЦИИ ЧЕРЕЗ GOOGLE ============ -->
 <div id="modal-google-creds" class="modal-bg hidden">
@@ -289,6 +353,7 @@ input,select{background:var(--surface-2)}
         <button class="nav-item" data-nav="menu" onclick="nav('menu')">Меню</button>
         <button class="nav-item" data-nav="security" onclick="nav('security')">Профиль</button>
         <button class="nav-item hidden" data-nav="admin" onclick="nav('admin')">Персонал</button>
+        <button class="nav-item hidden" data-nav="support" onclick="nav('support')">Обращения</button>
         <button class="nav-item hidden" data-nav="logs" onclick="nav('logs')">Журнал</button>
       </nav>
     </div>
@@ -355,7 +420,10 @@ input,select{background:var(--surface-2)}
 
     <!-- Профиль -->
     <section id="sec-security" class="hidden">
-      <div class="head"><div><h2>Профиль</h2><p>Имя и способы входа</p></div></div>
+      <div class="head">
+        <div><h2>Профиль</h2><p>Имя и способы входа</p></div>
+        <button class="sec" onclick="openSupport()">Написать администратору</button>
+      </div>
       <div class="panel" style="margin-bottom:16px">
         <p class="muted small" style="margin-bottom:12px">Логин <strong id="profile-login"></strong></p>
         <form class="stack" onsubmit="event.preventDefault();saveProfileName()">
@@ -420,6 +488,26 @@ input,select{background:var(--surface-2)}
         <tbody id="users-body"></tbody></table></div></div>
     </section>
 
+    <section id="sec-support" class="hidden">
+      <div class="head">
+        <div><h2>Обращения</h2><p>Переписка с сотрудниками</p></div>
+        <button class="sec" onclick="refreshAdminSupport()">Обновить</button>
+      </div>
+      <div class="two">
+        <div id="admin-support-list" class="panel support-ticket-list"></div>
+        <section id="admin-support-thread" class="panel stack hidden">
+          <h3 id="admin-support-name"></h3>
+          <p class="muted small">Обращение может отправить любой посетитель. Перед выдачей кода сброса проверьте, кто написал.</p>
+          <div id="admin-support-messages" class="support-messages" aria-label="Сообщения" role="log"></div>
+          <form class="stack" onsubmit="event.preventDefault();replyAsAdmin(this)">
+            <label for="admin-support-reply">Ответ сотруднику</label>
+            <textarea id="admin-support-reply" class="support-message" name="message" maxlength="2000" required></textarea>
+            <div class="row"><button type="submit">Ответить</button></div>
+          </form>
+        </section>
+      </div>
+    </section>
+
     <!-- Журнал -->
     <section id="sec-logs" class="hidden">
       <div class="head"><div><h2>Журнал аудита</h2><p>История за всё время в БД, зашифрованный бэкап и восстановление</p></div></div>
@@ -450,9 +538,9 @@ let TOKEN = localStorage.getItem('sv_token') || '';
 let USER = JSON.parse(localStorage.getItem('sv_user') || 'null');
 let MENU_CACHE = [], CART = [], CAT = 'Все';
 let PENDING_2FA = { id: '', mode: 'login', newPass: '' };
-const SECTIONS = ['pos','orders','menu','security','admin','logs'];
+const SECTIONS = ['pos','orders','menu','security','admin','support','logs'];
 const STAFF_SECTIONS = ['pos','orders','menu','security'];
-const ROLE_SECTIONS = { admin: ['admin','logs','security'], manager: STAFF_SECTIONS, user: STAFF_SECTIONS };
+const ROLE_SECTIONS = { admin: ['admin','support','logs','security'], manager: STAFF_SECTIONS, user: STAFF_SECTIONS };
 const ROLE_LABELS = { admin: 'Администратор', manager: 'Менеджер', user: 'Кассир' };
 const allowedSections = () => ROLE_SECTIONS[USER?.role] || ['security'];
 const CAT_COLORS = {
@@ -632,6 +720,11 @@ function saveSession(sess) {
 function doLogout(notifyServer = true) {
   if (notifyServer && TOKEN) fetch('/api/auth/logout', { method: 'POST', headers: { 'Authorization': 'Bearer ' + TOKEN } }).catch(() => {});
   TOKEN = ''; USER = null; MENU_CACHE = [];
+  ADMIN_TICKET_ID = 0;
+  $('admin-support-list').replaceChildren();
+  $('admin-support-thread').classList.add('hidden');
+  $('admin-support-messages').replaceChildren();
+  $('admin-support-reply').value = '';
   localStorage.removeItem('sv_token'); localStorage.removeItem('sv_user');
   clearAllInputs(); setAuthMode('login', $('atab-login'));
   $('app-view').classList.add('hidden'); $('auth-view').classList.remove('hidden');
@@ -668,6 +761,7 @@ function nav(sec) {
     else button.removeAttribute('aria-current');
   });
   document.body.dataset.sec = sec;
+  if (sec === 'support') refreshAdminSupport();
   toggleReceipt(false);
   window.scrollTo(0, 0);
 }
@@ -913,6 +1007,168 @@ async function setOrderSt(id, status) {
 async function delOrder(id) {
   if (!confirm('Удалить заказ?')) return;
   try { await api('DELETE', `/api/orders/${id}`); toast('Заказ удалён из БД'); loadOrders(); loadMenu(); } catch (e) { fail(e); }
+}
+
+/* ---------- Обращения ---------- */
+let SUPPORT_CODE = '', SUPPORT_BUSY = false, ADMIN_TICKET_ID = 0;
+const supportTime = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
+
+function openSupport() {
+  $('support-name').value = USER?.display_name || '';
+  $('support-dialog').showModal();
+}
+
+function clearSupport() {
+  SUPPORT_CODE = '';
+  ['support-create','support-open','support-reply'].forEach(id => $(id).reset());
+  $('support-code').value = '';
+  $('support-existing').open = false;
+  $('support-messages').replaceChildren();
+  $('support-entry').classList.remove('hidden');
+  $('support-thread').classList.add('hidden');
+  setSupportStatus('');
+}
+
+function setSupportStatus(message, error = false) {
+  $('support-status').textContent = message;
+  $('support-status').classList.toggle('error', error);
+}
+
+async function copySupportCode() {
+  try {
+    await navigator.clipboard.writeText(SUPPORT_CODE);
+    setSupportStatus('Код скопирован.');
+  } catch {
+    $('support-code').select();
+    setSupportStatus('Скопируйте выделенный код.');
+  }
+}
+
+function renderSupportMessages(container, messages, isAdmin) {
+  container.replaceChildren(...messages.map(item => {
+    const entry = document.createElement('article');
+    entry.dataset.sender = item.sender;
+    const header = document.createElement('header');
+    const author = document.createElement('strong');
+    author.textContent = item.sender === 'admin' ? 'Администратор' : isAdmin ? 'Сотрудник' : 'Вы';
+    const time = document.createElement('time');
+    time.className = 'muted small';
+    time.dateTime = item.created_at;
+    time.textContent = supportTime.format(new Date(item.created_at));
+    const body = document.createElement('p');
+    body.textContent = item.message;
+    header.append(author, time);
+    entry.append(header, body);
+    return entry;
+  }));
+  container.scrollTop = container.scrollHeight;
+}
+
+function submitSupport(form, path) {
+  const data = Object.fromEntries(new FormData(form));
+  if (SUPPORT_CODE) data.code = SUPPORT_CODE;
+  requestSupport(path, data);
+}
+
+async function requestSupport(path, data) {
+  if (SUPPORT_BUSY) return;
+  SUPPORT_BUSY = true;
+  const buttons = $('support-dialog').querySelectorAll('button');
+  buttons.forEach(button => button.disabled = true);
+  setSupportStatus('');
+  try {
+    const thread = await api('POST', path, data);
+    SUPPORT_CODE = thread.code || data.code;
+    $('support-code').value = SUPPORT_CODE;
+    $('support-entry').classList.add('hidden');
+    $('support-thread').classList.remove('hidden');
+    renderSupportMessages($('support-messages'), thread.messages, false);
+    if (path === '/api/support/reply') $('support-reply').reset();
+    if (path === '/api/support') setSupportStatus('Обращение отправлено.');
+    if (path === '/api/support/thread') setSupportStatus('Переписка обновлена.');
+  } catch (e) { setSupportStatus(e.message, true); }
+  finally {
+    SUPPORT_BUSY = false;
+    buttons.forEach(button => button.disabled = false);
+  }
+}
+
+async function loadAdminSupport() {
+  const token = TOKEN;
+  try {
+    const tickets = await api('GET', '/api/admin/support');
+    if (TOKEN !== token) return;
+    const list = $('admin-support-list');
+    list.replaceChildren();
+    if (!tickets.length) {
+      list.textContent = 'Обращений пока нет.';
+      return;
+    }
+    for (const ticket of tickets) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'sec';
+      button.dataset.ticketId = ticket.id;
+      button.setAttribute('aria-current', String(ticket.id === ADMIN_TICKET_ID));
+      const details = document.createElement('div');
+      const name = document.createElement('strong');
+      name.textContent = ticket.name;
+      const updated = document.createElement('div');
+      updated.className = 'muted small';
+      updated.textContent = `#${ticket.id} · ${supportTime.format(new Date(ticket.updated_at))}`;
+      details.append(name, updated);
+      const badge = document.createElement('span');
+      badge.className = 'badge ' + (ticket.last_sender === 'employee' ? 'b-warn' : 'b-ok');
+      badge.textContent = ticket.last_sender === 'employee' ? 'Ждёт ответа' : 'Ответ отправлен';
+      button.append(details, badge);
+      button.onclick = () => selectAdminSupport(ticket.id);
+      list.append(button);
+    }
+  } catch (e) { fail(e); }
+}
+
+function showAdminSupport(thread) {
+  $('admin-support-name').textContent = thread.name;
+  $('admin-support-thread').classList.remove('hidden');
+  renderSupportMessages($('admin-support-messages'), thread.messages, true);
+}
+
+async function selectAdminSupport(id) {
+  if (id !== ADMIN_TICKET_ID) {
+    $('admin-support-reply').value = '';
+    $('admin-support-thread').classList.add('hidden');
+  }
+  ADMIN_TICKET_ID = id;
+  for (const button of $('admin-support-list').querySelectorAll('button')) {
+    button.setAttribute('aria-current', String(Number(button.dataset.ticketId) === id));
+  }
+  const token = TOKEN;
+  try {
+    const thread = await api('GET', `/api/admin/support/${id}`);
+    if (TOKEN === token && ADMIN_TICKET_ID === id) showAdminSupport(thread);
+  } catch (e) { fail(e); }
+}
+
+function refreshAdminSupport() {
+  loadAdminSupport();
+  if (ADMIN_TICKET_ID) selectAdminSupport(ADMIN_TICKET_ID);
+}
+
+async function replyAsAdmin(form) {
+  const ticket = ADMIN_TICKET_ID, token = TOKEN;
+  const button = form.querySelector('button');
+  button.disabled = true;
+  try {
+    const data = Object.fromEntries(new FormData(form));
+    const thread = await api('POST', `/api/admin/support/${ticket}`, data);
+    if (TOKEN !== token) return;
+    if (ADMIN_TICKET_ID === ticket) {
+      form.reset();
+      showAdminSupport(thread);
+    }
+    loadAdminSupport();
+  } catch (e) { fail(e); }
+  finally { button.disabled = false; }
 }
 
 async function loadUsers() {
