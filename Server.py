@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -12,14 +13,16 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 
 import pandas as pd
 import psycopg2
+from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 import uvicorn
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,7 +52,8 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
-MASTER_KEY = os.environ.get("SERVER_MASTER_KEY", "").strip() or Fernet.generate_key().decode()
+CONFIGURED_MASTER_KEY = os.environ.get("SERVER_MASTER_KEY", "").strip()
+MASTER_KEY = CONFIGURED_MASTER_KEY or Fernet.generate_key().decode()
 
 MAX_ATTEMPTS = 5
 LOCK_SECONDS = 60
@@ -141,11 +145,28 @@ class PostgresDB:
         self.conn = psycopg2.connect(self.dsn, cursor_factory=RealDictCursor)
         self.conn.autocommit = True
 
-    def execute(self, query: str, params: tuple = (), fetch: str = "none"):
+    def _connect_if_closed(self):
+        if self.conn.closed:
+            self.conn = psycopg2.connect(self.dsn, cursor_factory=RealDictCursor)
+            self.conn.autocommit = True
+
+    @contextmanager
+    def transaction(self, *, readonly: bool = False):
         with self.lock:
-            if self.conn.closed:
-                self.conn = psycopg2.connect(self.dsn, cursor_factory=RealDictCursor)
-                self.conn.autocommit = True
+            self._connect_if_closed()
+            self.conn.autocommit = False
+            try:
+                with self.conn:
+                    if readonly:
+                        self.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                    yield
+            finally:
+                if not self.conn.closed:
+                    self.conn.autocommit = True
+
+    def execute(self, query, params: tuple = (), fetch: str = "none"):
+        with self.lock:
+            self._connect_if_closed()
             with self.conn.cursor() as cur:
                 cur.execute(query, params)
                 if fetch == "one":
@@ -373,12 +394,15 @@ def tg_poller():
                 if len(parts) < 2:
                     tg_call("sendMessage", {"chat_id": chat_id, "text": f"{APP_NAME}\nОткройте привязку в личном кабинете."})
                     continue
-                purge()
-                entry = link_tokens.pop(parts[1].strip(), None)
-                if not entry or entry["expires"] < time.time():
+                with db.lock:
+                    entry = link_tokens.pop(parts[1].strip(), None)
+                    if entry and entry["expires"] >= time.time():
+                        db.execute("UPDATE users SET tg_enc = %s WHERE username = %s", (db.enc(str(chat_id)), entry["name"]))
+                    else:
+                        entry = None
+                if not entry:
                     tg_call("sendMessage", {"chat_id": chat_id, "text": "Ссылка устарела. Сгенерируйте новый QR-код."})
                     continue
-                db.execute("UPDATE users SET tg_enc = %s WHERE username = %s", (db.enc(str(chat_id)), entry["name"]))
                 logger.info(f"[2FA ПРИВЯЗКА] Пользователь '{entry['name']}' привязал Telegram (chat_id={chat_id})")
                 tg_call("sendMessage", {"chat_id": chat_id, "text": f"Telegram успешно привязан к учётной записи «{entry['name']}»."})
         except Exception:
@@ -448,14 +472,24 @@ def current_user(authorization: str = Header(default="")):
         raise HTTPException(401, "Учётная запись не найдена.")
     return {"name": s["name"], "role": rec["role"], "rec": rec, "token": token}
 
+def require_staff(u=Depends(current_user)):
+    if u["role"] not in ("user", "manager"):
+        raise HTTPException(403, "Только для кассира или менеджера.")
+    return u
+
 def require_manager(u=Depends(current_user)):
-    if u["role"] not in ("admin", "manager"):
+    if u["role"] != "manager":
         raise HTTPException(403, "Недостаточно прав.")
     return u
 
 def require_admin(u=Depends(current_user)):
     if u["role"] != "admin":
         raise HTTPException(403, "Только для администратора.")
+    return u
+
+def require_backup_admin(u=Depends(require_admin)):
+    if not CONFIGURED_MASTER_KEY:
+        raise HTTPException(503, "Задайте постоянный SERVER_MASTER_KEY в настройках Render для работы с резервными копиями.")
     return u
 
 
@@ -523,6 +557,21 @@ class RoleIn(BaseModel):
 
 
 app = FastAPI(title=APP_NAME)
+write_lock = asyncio.Lock()
+
+
+@app.middleware("http")
+async def serialize_writes(request: Request, call_next):
+    path = request.url.path
+    writes = request.method in ("POST", "PATCH", "DELETE", "PUT") or path.startswith("/api/oauth/google/")
+    reads_backup = path.startswith("/api/admin/backup/")
+    if path.startswith("/api/") and (writes or reads_backup):
+        # Keep a restore or export from splitting a multi-statement app operation.
+        async with write_lock:
+            return await call_next(request)
+    return await call_next(request)
+
+
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -909,7 +958,7 @@ def unlink_google(u=Depends(current_user)):
 
 
 @app.get("/api/menu")
-def get_menu(u=Depends(current_user)):
+def get_menu(u=Depends(require_staff)):
     rows = db.execute("SELECT * FROM menu WHERE is_active IS DISTINCT FROM FALSE ORDER BY id", (), "all")
     for r in rows:
         r["price"] = float(r["price"])
@@ -959,7 +1008,7 @@ def delete_menu(item_id: int, u=Depends(require_manager)):
 
 
 @app.get("/api/orders")
-def get_orders(u=Depends(current_user)):
+def get_orders(u=Depends(require_staff)):
     rows = db.execute("SELECT * FROM orders ORDER BY id DESC", (), "all")
     for r in rows:
         r["table"] = r.pop("table_name")
@@ -968,7 +1017,7 @@ def get_orders(u=Depends(current_user)):
     return rows
 
 @app.post("/api/orders")
-def create_order(b: OrderIn, u=Depends(current_user)):
+def create_order(b: OrderIn, u=Depends(require_staff)):
     merged: dict[int, int] = {}
     for ln in b.items:
         merged[ln.id] = merged.get(ln.id, 0) + ln.qty
@@ -1009,7 +1058,7 @@ def create_order(b: OrderIn, u=Depends(current_user)):
     return {"id": oid, "total": total}
 
 @app.patch("/api/orders/{order_id}/status")
-def update_order_status(order_id: int, b: StatusIn, u=Depends(current_user)):
+def update_order_status(order_id: int, b: StatusIn, u=Depends(require_staff)):
     row = db.execute("SELECT status FROM orders WHERE id = %s", (order_id,), "one")
     if not row:
         raise HTTPException(404, "Заказ не найден.")
@@ -1131,7 +1180,7 @@ def get_logs(start_time: Optional[str] = None, end_time: Optional[str] = None, u
 
 
 @app.get("/api/admin/backup/logs/json")
-def export_logs_json(u=Depends(require_admin)):
+def export_logs_json(u=Depends(require_backup_admin)):
     rows = db.execute(
         "SELECT created_at::text, level, actor, category, message FROM audit_logs ORDER BY id ASC",
         (),
@@ -1159,70 +1208,82 @@ def export_logs_json(u=Depends(require_admin)):
     )
 
 
+async def read_backup_json(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(400, "Файл резервной копии не удалось прочитать.")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Неверный формат файла резервной копии.")
+    return body
+
+
 @app.post("/api/admin/restore/logs/json")
-async def restore_logs_json(request: Request, u=Depends(require_admin)):
-    body = await request.json()
-    enc_blob = body.get("encrypted_data", "")
-    if not enc_blob:
+def restore_logs_json(u=Depends(require_backup_admin), body=Depends(read_backup_json)):
+    enc_blob = body.get("encrypted_data")
+    if not isinstance(enc_blob, str) or not enc_blob:
         raise HTTPException(400, "В файле отсутствует зашифрованный блок encrypted_data.")
     try:
-        decrypted_text = db.dec(enc_blob)
-        payload = json.loads(decrypted_text)
-        entries = payload.get("logs")
-        if not isinstance(entries, list):
+        payload = json.loads(db.dec(enc_blob))
+        entries = payload.get("logs") if isinstance(payload, dict) else None
+        if not isinstance(entries, list) or any(not isinstance(item, dict) for item in entries):
             raise ValueError("Некорректная структура логов.")
-    except Exception:
-        logger.error(f"[ЦЕЛОСТНОСТЬ ЛОГОВ] Админ '{u['name']}' попытался загрузить повреждённый или чужой зашифрованный бэкап логов")
-        raise HTTPException(400, "Не удалось расшифровать бэкап логов: неверный ключ или файл повреждён.")
+    except (ValueError, TypeError, InvalidToken):
+        logger.error(f"[ЦЕЛОСТНОСТЬ ЛОГОВ] Админ '{u['name']}' загрузил файл с неверным ключом или форматом")
+        raise HTTPException(400, "Не удалось расшифровать бэкап логов. Проверьте файл и SERVER_MASTER_KEY.")
 
-    db.execute("DELETE FROM audit_logs")
-    for item in entries:
-        raw_actor = item.get("actor")
-        valid_actor = raw_actor if raw_actor and db.execute("SELECT 1 FROM users WHERE username = %s", (raw_actor,), "one") else None
-        db.execute(
-            "INSERT INTO audit_logs (created_at, level, actor, category, message) VALUES (%s, %s, %s, %s, %s)",
-            (
-                item.get("created_at") or utc_now(),
-                (item.get("level") or "INFO")[:16],
-                valid_actor,
-                (item.get("category") or "АУДИТ")[:64],
-                item.get("message") or "",
-            ),
-        )
+    try:
+        with db.transaction():
+            db.execute("LOCK TABLE users IN SHARE MODE")
+            db.execute("LOCK TABLE audit_logs IN SHARE ROW EXCLUSIVE MODE")
+            db.execute("DELETE FROM audit_logs")
+            for item in entries:
+                db.execute(
+                    """
+                    INSERT INTO audit_logs (created_at, level, actor, category, message)
+                    VALUES (COALESCE(%s, CURRENT_TIMESTAMP), %s,
+                            (SELECT username FROM users WHERE username = %s), %s, %s)
+                    """,
+                    (
+                        item.get("created_at"),
+                        (item.get("level") or "INFO")[:16],
+                        item.get("actor"),
+                        (item.get("category") or "АУДИТ")[:64],
+                        item.get("message") or "",
+                    ),
+                )
+    except (psycopg2.Error, TypeError) as exc:
+        reason = getattr(exc, "pgcode", None) or type(exc).__name__
+        logger.error(f"[ВОССТАНОВЛЕНИЕ ЛОГОВ] Ошибка загрузки копии ({u['name']}), код {reason}")
+        raise HTTPException(409, "Восстановление логов отменено. Записи журнала сохранены.")
     logger.warning(f"[ВОССТАНОВЛЕНИЕ ЛОГОВ] Админ '{u['name']}' восстановил {len(entries)} записей логов из зашифрованного JSON")
     return {"status": "ok", "restored": len(entries)}
 
 
 @app.get("/api/admin/backup/bak")
 @app.get("/api/admin/backup/json")
-def export_bak(u=Depends(require_admin)):
-    users = db.execute("SELECT * FROM users", (), "all")
-    clean_users = [
-        {
-            "username": r["username"],
-            "role": r["role"],
-            "pw_hash": r["pw_hash"],
-            "rec_hash": r["rec_hash"],
-            "tg_enc": r.get("tg_enc", ""),
-            "google_sub": r.get("google_sub"),
-            "google_email": r.get("google_email"),
-            "failed": r.get("failed", 0),
-            "locked_until": r["locked_until"].isoformat() if hasattr(r.get("locked_until"), "isoformat") else r.get("locked_until"),
-            "has_password": bool(r.get("has_password", True)) if "has_password" in r else True,
-        }
-        for r in users
-    ]
-    categories = db.execute("SELECT id, name, sort_order, color FROM categories ORDER BY id", (), "all")
-    dining_tables = db.execute("SELECT id, label, seats, zone, status FROM dining_tables ORDER BY id", (), "all")
-    menu = db.execute("SELECT id, name, category_id, category, ingredients, price::float, discount, stock, is_active FROM menu ORDER BY id", (), "all")
-    orders = db.execute("SELECT id, table_id, table_name, type, items, total::float, payment, status, waiter, created_at::text FROM orders ORDER BY id", (), "all")
-    order_items = db.execute("SELECT id, order_id, menu_item_id, name, qty, price::float FROM order_items ORDER BY id", (), "all")
-    order_status_history = db.execute("SELECT id, order_id, old_status, new_status, changed_by, changed_at::text FROM order_status_history ORDER BY id", (), "all")
-    stock_movements = db.execute("SELECT id, menu_item_id, delta, reason, actor, created_at::text FROM stock_movements ORDER BY id", (), "all")
-    invite_codes = db.execute("SELECT id, code_hash, role, created_by, expires_at::text, used_by, used_at::text FROM invite_codes ORDER BY id", (), "all")
+def export_bak(u=Depends(require_backup_admin)):
+    with db.transaction(readonly=True):
+        users = db.execute(
+            """
+            SELECT username, role, pw_hash, rec_hash, tg_enc, google_sub, google_email,
+                   failed, locked_until::text, has_password, created_at::text
+            FROM users ORDER BY username
+            """,
+            (),
+            "all",
+        )
+        categories = db.execute("SELECT id, name, sort_order, color FROM categories ORDER BY id", (), "all")
+        dining_tables = db.execute("SELECT id, label, seats, zone, status FROM dining_tables ORDER BY id", (), "all")
+        menu = db.execute("SELECT id, name, category_id, category, ingredients, price::float, discount, stock, is_active FROM menu ORDER BY id", (), "all")
+        orders = db.execute("SELECT id, table_id, table_name, type, items, total::float, payment, status, waiter, created_at::text FROM orders ORDER BY id", (), "all")
+        order_items = db.execute("SELECT id, order_id, menu_item_id, name, qty, price::float FROM order_items ORDER BY id", (), "all")
+        order_status_history = db.execute("SELECT id, order_id, old_status, new_status, changed_by, changed_at::text FROM order_status_history ORDER BY id", (), "all")
+        stock_movements = db.execute("SELECT id, menu_item_id, delta, reason, actor, created_at::text FROM stock_movements ORDER BY id", (), "all")
+        invite_codes = db.execute("SELECT id, code_hash, role, created_by, expires_at::text, used_by, used_at::text FROM invite_codes ORDER BY id", (), "all")
 
     data_block = _canonicalize_numbers({
-        "users": clean_users,
+        "users": users,
         "categories": categories,
         "dining_tables": dining_tables,
         "menu": menu,
@@ -1246,87 +1307,142 @@ def export_bak(u=Depends(require_admin)):
                              headers={"Content-Disposition": "attachment; filename=GurmanPOS_Backup.bak"})
 
 
-@app.post("/api/admin/restore/bak")
-@app.post("/api/admin/restore/json")
-async def restore_bak(request: Request, u=Depends(require_admin)):
-    raw_bytes = await request.body()
-    try:
-        snapshot = json.loads(raw_bytes.decode("utf-8"))
-    except Exception:
-        raise HTTPException(400, "Файл .bak повреждён или имеет неверный формат.")
-
-    data_block = snapshot.get("data")
-    sig = snapshot.get("integrity_hmac_sha256", "")
-    if not data_block or not sig:
-        raise HTTPException(400, "Неверный формат файла бэкапа или отсутствует подпись целостности.")
-
-    expected_sig = compute_integrity_hmac(data_block)
-    if not hmac.compare_digest(sig, expected_sig):
-        logger.error(f"[ЦЕЛОСТНОСТЬ НАРУШЕНА] Админ '{u['name']}' попытался загрузить изменённый файл бэкапа!")
-        raise HTTPException(400, "ОШИБКА ЦЕЛОСТНОСТИ: Контрольная сумма HMAC-SHA256 не совпадает! Файл был модифицирован.")
-
-    db.execute("DELETE FROM order_status_history")
-    db.execute("DELETE FROM order_items")
-    db.execute("DELETE FROM stock_movements")
-    db.execute("DELETE FROM orders")
-    db.execute("DELETE FROM menu")
-    db.execute("DELETE FROM dining_tables")
-    db.execute("DELETE FROM categories")
-    db.execute("DELETE FROM invite_codes")
-    db.execute("DELETE FROM users")
-
-    for r in data_block.get("users", []):
+def restart_id_sequence(table: str):
+    row = db.execute(
+        sql.SQL("""
+            SELECT ns.nspname, seq.relname,
+                   COALESCE((SELECT MAX(id) + 1 FROM {}), seq_config.seqstart) AS next_id
+            FROM pg_class seq
+            JOIN pg_namespace ns ON ns.oid = seq.relnamespace
+            JOIN pg_sequence seq_config ON seq_config.seqrelid = seq.oid
+            WHERE seq.oid = pg_get_serial_sequence(%s, 'id')::regclass
+        """).format(sql.Identifier(table)),
+        (table,),
+        "one",
+    )
+    if row:
         db.execute(
-            "INSERT INTO users (username, role, pw_hash, rec_hash, tg_enc, google_sub, google_email, failed, locked_until, has_password) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (r["username"], r["role"], r["pw_hash"], r["rec_hash"], r.get("tg_enc", ""), r.get("google_sub"), r.get("google_email"), r.get("failed", 0), r.get("locked_until"), r.get("has_password", True))
+            sql.SQL("ALTER SEQUENCE {} RESTART WITH %s").format(sql.Identifier(row["nspname"], row["relname"])),
+            (row["next_id"],),
+        )
+
+
+def replace_database(data_block: dict):
+    db.execute(
+        "LOCK TABLE users, audit_logs, categories, dining_tables, menu, orders, order_items, "
+        "order_status_history, stock_movements, invite_codes IN SHARE ROW EXCLUSIVE MODE"
+    )
+    # Keep the audit journal and reattach actors whose accounts are in the backup.
+    db.execute("CREATE TEMP TABLE restore_audit_actors ON COMMIT DROP AS SELECT id, actor FROM audit_logs WHERE actor IS NOT NULL")
+    db.execute("UPDATE audit_logs SET actor = NULL WHERE actor IS NOT NULL")
+
+    for table in (
+        "order_status_history", "order_items", "stock_movements", "orders", "menu",
+        "dining_tables", "categories", "invite_codes", "users",
+    ):
+        db.execute(sql.SQL("DELETE FROM {}").format(sql.Identifier(table)))
+
+    for r in data_block["users"]:
+        db.execute(
+            "INSERT INTO users (username, role, pw_hash, rec_hash, tg_enc, google_sub, google_email, failed, locked_until, has_password, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, CURRENT_TIMESTAMP))",
+            (r["username"], r["role"], r["pw_hash"], r["rec_hash"], r.get("tg_enc", ""), r.get("google_sub"), r.get("google_email"), r.get("failed", 0), r.get("locked_until"), r.get("has_password", True), r.get("created_at"))
         )
     for c in data_block.get("categories", []):
         db.execute(
-            "INSERT INTO categories (id, name, sort_order, color) VALUES (%s, %s, %s, %s)",
+            "INSERT INTO categories (id, name, sort_order, color) OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s)",
             (c["id"], c["name"], c.get("sort_order", 0), c.get("color", "#B9A4F5"))
         )
     for t in data_block.get("dining_tables", []):
         db.execute(
-            "INSERT INTO dining_tables (id, label, seats, zone, status) VALUES (%s, %s, %s, %s, %s)",
+            "INSERT INTO dining_tables (id, label, seats, zone, status) OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s)",
             (t["id"], t["label"], t.get("seats", 4), t.get("zone", "Основной зал"), t.get("status", "free"))
         )
+    restart_id_sequence("categories")
+    restart_id_sequence("dining_tables")
     for m in data_block.get("menu", []):
         cat_id = m.get("category_id") or ensure_category(m.get("category", "Прочее"))
         db.execute(
-            "INSERT INTO menu (id, name, category_id, category, ingredients, price, discount, stock, is_active) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "INSERT INTO menu (id, name, category_id, category, ingredients, price, discount, stock, is_active) OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (m["id"], m["name"], cat_id, m["category"], m["ingredients"], m["price"], m["discount"], m["stock"], m.get("is_active", True))
         )
     for o in data_block.get("orders", []):
         tbl_id = o.get("table_id") or ensure_table(o["table_name"], o.get("type", "В заведении"))
         db.execute(
-            "INSERT INTO orders (id, table_id, table_name, type, items, total, payment, status, waiter, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "INSERT INTO orders (id, table_id, table_name, type, items, total, payment, status, waiter, created_at) OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (o["id"], tbl_id, o["table_name"], o["type"], o["items"], o["total"], o["payment"], o["status"], o["waiter"], o["created_at"])
         )
     for oi in data_block.get("order_items", []):
         db.execute(
-            "INSERT INTO order_items (id, order_id, menu_item_id, name, qty, price) VALUES (%s, %s, %s, %s, %s, %s)",
+            "INSERT INTO order_items (id, order_id, menu_item_id, name, qty, price) OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s, %s)",
             (oi["id"], oi["order_id"], oi["menu_item_id"], oi["name"], oi["qty"], oi["price"])
         )
     for h in data_block.get("order_status_history", []):
         db.execute(
-            "INSERT INTO order_status_history (id, order_id, old_status, new_status, changed_by, changed_at) VALUES (%s, %s, %s, %s, %s, %s)",
+            "INSERT INTO order_status_history (id, order_id, old_status, new_status, changed_by, changed_at) OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s, %s)",
             (h["id"], h["order_id"], h["old_status"], h["new_status"], h.get("changed_by"), h.get("changed_at"))
         )
     for sm in data_block.get("stock_movements", []):
         db.execute(
-            "INSERT INTO stock_movements (id, menu_item_id, delta, reason, actor, created_at) VALUES (%s, %s, %s, %s, %s, %s)",
+            "INSERT INTO stock_movements (id, menu_item_id, delta, reason, actor, created_at) OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s, %s)",
             (sm["id"], sm["menu_item_id"], sm["delta"], sm["reason"], sm.get("actor"), sm.get("created_at"))
         )
     for ic in data_block.get("invite_codes", []):
         db.execute(
-            "INSERT INTO invite_codes (id, code_hash, role, created_by, expires_at, used_by, used_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            "INSERT INTO invite_codes (id, code_hash, role, created_by, expires_at, used_by, used_at) OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s, %s, %s)",
             (ic["id"], ic["code_hash"], ic["role"], ic.get("created_by"), ic.get("expires_at"), ic.get("used_by"), ic.get("used_at"))
         )
 
-    for tbl in ("categories", "dining_tables", "menu", "orders", "order_items", "order_status_history", "stock_movements", "invite_codes"):
-        db.execute(f"SELECT setval(pg_get_serial_sequence('public.{tbl}', 'id'), COALESCE((SELECT MAX(id) FROM public.{tbl}), 1), true)")
+    for table in ("menu", "orders", "order_items", "order_status_history", "stock_movements", "invite_codes"):
+        restart_id_sequence(table)
 
-    seed_reference_tables()
+    db.execute(
+        """
+        UPDATE audit_logs AS logs SET actor = saved.actor
+        FROM restore_audit_actors AS saved JOIN users ON users.username = saved.actor
+        WHERE logs.id = saved.id
+        """
+    )
+
+
+@app.post("/api/admin/restore/bak")
+@app.post("/api/admin/restore/json")
+def restore_bak(u=Depends(require_backup_admin), snapshot=Depends(read_backup_json)):
+    data_block = snapshot.get("data")
+    sig = snapshot.get("integrity_hmac_sha256")
+    if not isinstance(data_block, dict) or not isinstance(sig, str) or not re.fullmatch(r"[0-9a-f]{64}", sig):
+        raise HTTPException(400, "Неверный формат файла бэкапа или отсутствует подпись целостности.")
+
+    if not hmac.compare_digest(sig, compute_integrity_hmac(data_block)):
+        logger.warning(f"[ЦЕЛОСТНОСТЬ] Подпись файла бэкапа не совпала ({u['name']})")
+        raise HTTPException(400, "Подпись бэкапа не совпала. Проверьте файл и SERVER_MASTER_KEY, которым он был подписан.")
+
+    version = snapshot.get("version")
+    required_tables = {"users", "menu", "orders"}
+    if version in (4, 5):
+        required_tables.add("order_items")
+    if version == 5:
+        required_tables.update(("categories", "dining_tables", "order_status_history", "stock_movements", "invite_codes"))
+    if version not in (3, 4, 5) or not required_tables.issubset(data_block) or any(
+        not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows)
+        for rows in data_block.values()
+    ):
+        raise HTTPException(400, "Неподдерживаемая версия или неполная структура бэкапа.")
+    if not any(row.get("role") == "admin" for row in data_block["users"]):
+        raise HTTPException(400, "В бэкапе должна быть хотя бы одна учётная запись администратора.")
+
+    try:
+        with db.lock:
+            with db.transaction():
+                replace_database(data_block)
+                if version < 5:
+                    seed_reference_tables()
+            for store in (sessions, challenges, link_tokens, oauth_states):
+                store.clear()
+    except (psycopg2.Error, KeyError, TypeError) as exc:
+        reason = getattr(exc, "pgcode", None) or type(exc).__name__
+        logger.error(f"[ВОССТАНОВЛЕНИЕ] Ошибка загрузки бэкапа ({u['name']}), код {reason}")
+        raise HTTPException(409, "Восстановление отменено. Данные базы сохранены.")
+
     logger.warning(f"[ВОССТАНОВЛЕНИЕ] БД успешно восстановлена из .bak ({u['name']})")
     return {"status": "ok"}
 
@@ -1334,9 +1450,10 @@ async def restore_bak(request: Request, u=Depends(require_admin)):
 @app.get("/api/admin/backup/excel")
 def export_excel(u=Depends(require_admin)):
     output = io.BytesIO()
-    df_orders = pd.read_sql_query("SELECT id, table_name AS Стол, type AS Тип, items AS Состав, total AS Сумма, payment AS Оплата, status AS Статус, waiter AS Кассир FROM orders", db.conn)
-    df_menu = pd.read_sql_query("SELECT id, name AS Блюдо, category AS Категория, price AS Цена, discount AS Скидка, stock AS Остаток FROM menu", db.conn)
-    df_users = pd.read_sql_query("SELECT username AS Логин, role AS Роль, google_email AS Google FROM users", db.conn)
+    with db.transaction(readonly=True):
+        df_orders = pd.read_sql_query("SELECT id, table_name AS Стол, type AS Тип, items AS Состав, total AS Сумма, payment AS Оплата, status AS Статус, waiter AS Кассир FROM orders", db.conn)
+        df_menu = pd.read_sql_query("SELECT id, name AS Блюдо, category AS Категория, price AS Цена, discount AS Скидка, stock AS Остаток FROM menu", db.conn)
+        df_users = pd.read_sql_query("SELECT username AS Логин, role AS Роль, google_email AS Google FROM users", db.conn)
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df_orders.to_excel(writer, sheet_name="Заказы", index=False)
         df_menu.to_excel(writer, sheet_name="Меню", index=False)
