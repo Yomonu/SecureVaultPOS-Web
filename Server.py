@@ -266,6 +266,69 @@ def init_support_tables():
         db.execute("CREATE INDEX IF NOT EXISTS messages_ticket_idx ON gurman_support.messages (ticket_id, id)")
 
 
+def init_delete_audit():
+    tables = (
+        ("public", "users", "username"),
+        ("public", "categories", "id"),
+        ("public", "dining_tables", "id"),
+        ("public", "menu", "id"),
+        ("public", "orders", "id"),
+        ("public", "order_items", "id"),
+        ("public", "order_status_history", "id"),
+        ("public", "stock_movements", "id"),
+        ("public", "invite_codes", "id"),
+        ("public", "audit_logs", "id"),
+        ("gurman_support", "tickets", "id"),
+        ("gurman_support", "messages", "id"),
+    )
+    with db.transaction():
+        db.execute("CREATE SCHEMA IF NOT EXISTS gurman_audit")
+        db.execute("REVOKE ALL ON SCHEMA gurman_audit FROM PUBLIC")
+        db.execute(
+            """
+            CREATE OR REPLACE FUNCTION gurman_audit.log_row_delete()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            SECURITY DEFINER
+            SET search_path = pg_catalog
+            AS $$
+            DECLARE
+                row_key text;
+            BEGIN
+                IF current_setting('gurman.restore_in_progress', true) = 'on' THEN
+                    RETURN NULL;
+                END IF;
+
+                IF TG_ARGV[0] = 'username' THEN
+                    row_key := OLD.username::text;
+                ELSE
+                    row_key := OLD.id::text;
+                END IF;
+
+                INSERT INTO public.audit_logs (created_at, level, actor, category, message)
+                VALUES (
+                    clock_timestamp(), 'WARNING', NULL, 'УДАЛЕНИЕ БД',
+                    concat(
+                        '[УДАЛЕНИЕ БД] ', quote_ident(TG_TABLE_SCHEMA), '.', quote_ident(TG_TABLE_NAME),
+                        ': удалена строка (', TG_ARGV[0], '=', quote_nullable(row_key),
+                        '). Роль PostgreSQL: ', quote_ident(session_user), '.'
+                    )
+                );
+                RETURN NULL;
+            END;
+            $$
+            """
+        )
+        db.execute("REVOKE ALL ON FUNCTION gurman_audit.log_row_delete() FROM PUBLIC")
+        for schema, table, key in tables:
+            db.execute(
+                sql.SQL(
+                    "CREATE OR REPLACE TRIGGER gurman_audit_row_delete AFTER DELETE ON {} "
+                    "FOR EACH ROW EXECUTE FUNCTION gurman_audit.log_row_delete({})"
+                ).format(sql.Identifier(schema, table), sql.Literal(key))
+            )
+
+
 def seed_reference_tables():
     for name, sort_order, color in DEFAULT_CATEGORIES:
         db.execute(
@@ -667,6 +730,7 @@ def on_startup():
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(80) NOT NULL DEFAULT ''")
     seed_reference_tables()
     init_support_tables()
+    init_delete_audit()
     init_telegram_bot()
     threading.Thread(target=tg_poller, daemon=True).start()
 
@@ -1487,6 +1551,7 @@ def restore_logs_json(u=Depends(require_backup_admin), body=Depends(read_backup_
 
     try:
         with db.transaction():
+            db.execute("SET LOCAL gurman.restore_in_progress = 'on'")
             db.execute("LOCK TABLE users IN SHARE MODE")
             db.execute("LOCK TABLE audit_logs IN SHARE ROW EXCLUSIVE MODE")
             db.execute("DELETE FROM audit_logs")
@@ -1692,6 +1757,7 @@ def restore_bak(u=Depends(require_backup_admin), snapshot=Depends(read_backup_js
     try:
         with db.lock:
             with db.transaction():
+                db.execute("SET LOCAL gurman.restore_in_progress = 'on'")
                 replace_database(data_block)
                 if version < 5:
                     seed_reference_tables()

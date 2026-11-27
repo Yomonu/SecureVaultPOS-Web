@@ -518,7 +518,7 @@ input,select{background:var(--surface-2)}
         <div class="row" style="margin-bottom:14px">
           <input id="log-s" placeholder="С: 08:00:00 или 2026-11-23" style="flex:1 1 170px">
           <input id="log-e" placeholder="По: 18:00:00" style="flex:1 1 140px">
-          <button onclick="loadLogs()">Применить</button>
+          <button onclick="loadLogs()">Обновить журнал</button>
           <button class="sec" onclick="resetLogs()">Сбросить</button>
         </div>
         <div class="row" style="margin-bottom:14px">
@@ -750,7 +750,7 @@ async function initApp() {
   applyRoleUI();
   nav(allowedSections()[0]);
   $('auth-view').classList.add('hidden'); $('app-view').classList.remove('hidden');
-  if (USER.role === 'admin') { loadUsers(); loadLogs(); }
+  if (USER.role === 'admin') loadUsers();
   else if (allowedSections().includes('pos')) { loadMenu(); loadOrders(); }
 }
 function nav(sec) {
@@ -765,6 +765,7 @@ function nav(sec) {
   });
   document.body.dataset.sec = sec;
   if (sec === 'support') refreshAdminSupport();
+  if (sec === 'logs') loadLogs();
   toggleReceipt(false);
   window.scrollTo(0, 0);
 }
