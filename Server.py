@@ -295,6 +295,8 @@ def init_database_audit():
             DECLARE
                 record_data record;
                 row_key text;
+                dish_name text;
+                previous_dish_name text;
                 operation_label text;
                 operation_description text;
                 severity text := 'INFO   ';
@@ -326,14 +328,43 @@ def init_database_audit():
                         severity := 'WARNING';
                 END CASE;
 
-                IF TG_LEVEL = 'ROW' THEN
-                    IF TG_ARGV[0] = 'username' THEN
-                        row_key := record_data.username::text;
+                IF TG_TABLE_SCHEMA = 'public' AND TG_TABLE_NAME = 'menu' THEN
+                    IF TG_OP = 'TRUNCATE' THEN
+                        operation_description := 'Очищено меню';
                     ELSE
-                        row_key := record_data.id::text;
+                        dish_name := coalesce(
+                            nullif(btrim(regexp_replace(record_data.name, '[[:cntrl:]]+', ' ', 'g')), ''),
+                            'без названия'
+                        );
+                        operation_description := CASE TG_OP
+                            WHEN 'INSERT' THEN concat('Добавлено блюдо «', dish_name, '»')
+                            WHEN 'UPDATE' THEN concat('Изменено блюдо «', dish_name, '»')
+                            WHEN 'DELETE' THEN concat('Удалено блюдо «', dish_name, '»')
+                        END;
+                        IF TG_OP = 'UPDATE' AND OLD.name IS DISTINCT FROM NEW.name THEN
+                            previous_dish_name := coalesce(
+                                nullif(btrim(regexp_replace(OLD.name, '[[:cntrl:]]+', ' ', 'g')), ''),
+                                'без названия'
+                            );
+                            operation_description := concat(
+                                'Блюдо «', previous_dish_name, '» переименовано в «', dish_name, '»'
+                            );
+                        END IF;
+                        operation_description := concat(operation_description, ' (№', record_data.id, ')');
+                    END IF;
+                ELSE
+                    IF TG_LEVEL = 'ROW' THEN
+                        IF TG_ARGV[0] = 'username' THEN
+                            row_key := record_data.username::text;
+                        ELSE
+                            row_key := record_data.id::text;
+                        END IF;
+                        operation_description := concat(
+                            operation_description, ' (', TG_ARGV[0], '=', quote_nullable(row_key), ')'
+                        );
                     END IF;
                     operation_description := concat(
-                        operation_description, ' (', TG_ARGV[0], '=', quote_nullable(row_key), ')'
+                        quote_ident(TG_TABLE_SCHEMA), '.', quote_ident(TG_TABLE_NAME), ': ', operation_description
                     );
                 END IF;
 
@@ -341,8 +372,8 @@ def init_database_audit():
                 VALUES (
                     clock_timestamp(), severity, NULL, operation_label,
                     concat(
-                        '[', operation_label, '] ', quote_ident(TG_TABLE_SCHEMA), '.', quote_ident(TG_TABLE_NAME),
-                        ': ', operation_description, '. Роль PostgreSQL: ', quote_ident(session_user), '.'
+                        '[', operation_label, '] ', operation_description,
+                        '. Роль PostgreSQL: ', quote_ident(session_user), '.'
                     )
                 );
                 RETURN NULL;
