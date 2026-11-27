@@ -266,7 +266,7 @@ def init_support_tables():
         db.execute("CREATE INDEX IF NOT EXISTS messages_ticket_idx ON gurman_support.messages (ticket_id, id)")
 
 
-def init_delete_audit():
+def init_database_audit():
     tables = (
         ("public", "users", "username"),
         ("public", "categories", "id"),
@@ -286,32 +286,63 @@ def init_delete_audit():
         db.execute("REVOKE ALL ON SCHEMA gurman_audit FROM PUBLIC")
         db.execute(
             """
-            CREATE OR REPLACE FUNCTION gurman_audit.log_row_delete()
+            CREATE OR REPLACE FUNCTION gurman_audit.log_table_change()
             RETURNS trigger
             LANGUAGE plpgsql
             SECURITY DEFINER
             SET search_path = pg_catalog
             AS $$
             DECLARE
+                record_data record;
                 row_key text;
+                operation_label text;
+                operation_description text;
+                severity text := 'INFO   ';
             BEGIN
-                IF current_setting('gurman.restore_in_progress', true) = 'on' THEN
+                IF session_user = current_user AND current_setting('gurman.restore_in_progress', true) = 'on' THEN
                     RETURN NULL;
                 END IF;
 
-                IF TG_ARGV[0] = 'username' THEN
-                    row_key := OLD.username::text;
-                ELSE
-                    row_key := OLD.id::text;
+                CASE TG_OP
+                    WHEN 'INSERT' THEN
+                        operation_label := 'ДОБАВЛЕНИЕ БД';
+                        operation_description := 'добавлена строка';
+                        record_data := NEW;
+                    WHEN 'UPDATE' THEN
+                        IF to_jsonb(OLD) = to_jsonb(NEW) THEN
+                            RETURN NULL;
+                        END IF;
+                        operation_label := 'ИЗМЕНЕНИЕ БД';
+                        operation_description := 'изменена строка';
+                        record_data := NEW;
+                    WHEN 'DELETE' THEN
+                        operation_label := 'УДАЛЕНИЕ БД';
+                        operation_description := 'удалена строка';
+                        severity := 'WARNING';
+                        record_data := OLD;
+                    WHEN 'TRUNCATE' THEN
+                        operation_label := 'ОЧИСТКА БД';
+                        operation_description := 'очищена таблица';
+                        severity := 'WARNING';
+                END CASE;
+
+                IF TG_LEVEL = 'ROW' THEN
+                    IF TG_ARGV[0] = 'username' THEN
+                        row_key := record_data.username::text;
+                    ELSE
+                        row_key := record_data.id::text;
+                    END IF;
+                    operation_description := concat(
+                        operation_description, ' (', TG_ARGV[0], '=', quote_nullable(row_key), ')'
+                    );
                 END IF;
 
                 INSERT INTO public.audit_logs (created_at, level, actor, category, message)
                 VALUES (
-                    clock_timestamp(), 'WARNING', NULL, 'УДАЛЕНИЕ БД',
+                    clock_timestamp(), severity, NULL, operation_label,
                     concat(
-                        '[УДАЛЕНИЕ БД] ', quote_ident(TG_TABLE_SCHEMA), '.', quote_ident(TG_TABLE_NAME),
-                        ': удалена строка (', TG_ARGV[0], '=', quote_nullable(row_key),
-                        '). Роль PostgreSQL: ', quote_ident(session_user), '.'
+                        '[', operation_label, '] ', quote_ident(TG_TABLE_SCHEMA), '.', quote_ident(TG_TABLE_NAME),
+                        ': ', operation_description, '. Роль PostgreSQL: ', quote_ident(session_user), '.'
                     )
                 );
                 RETURN NULL;
@@ -319,14 +350,25 @@ def init_delete_audit():
             $$
             """
         )
-        db.execute("REVOKE ALL ON FUNCTION gurman_audit.log_row_delete() FROM PUBLIC")
+        db.execute("REVOKE ALL ON FUNCTION gurman_audit.log_table_change() FROM PUBLIC")
         for schema, table, key in tables:
+            relation = sql.Identifier(schema, table)
+            db.execute(sql.SQL("DROP TRIGGER IF EXISTS gurman_audit_row_delete ON {}").format(relation))
+            # Log edits to the journal itself. Its inserts are the audit records.
+            operations = sql.SQL("UPDATE OR DELETE" if table == "audit_logs" else "INSERT OR UPDATE OR DELETE")
             db.execute(
                 sql.SQL(
-                    "CREATE OR REPLACE TRIGGER gurman_audit_row_delete AFTER DELETE ON {} "
-                    "FOR EACH ROW EXECUTE FUNCTION gurman_audit.log_row_delete({})"
-                ).format(sql.Identifier(schema, table), sql.Literal(key))
+                    "CREATE OR REPLACE TRIGGER gurman_audit_row_change AFTER {} ON {} "
+                    "FOR EACH ROW EXECUTE FUNCTION gurman_audit.log_table_change({})"
+                ).format(operations, relation, sql.Literal(key))
             )
+            db.execute(
+                sql.SQL(
+                    "CREATE OR REPLACE TRIGGER gurman_audit_truncate AFTER TRUNCATE ON {} "
+                    "FOR EACH STATEMENT EXECUTE FUNCTION gurman_audit.log_table_change()"
+                ).format(relation)
+            )
+        db.execute("DROP FUNCTION IF EXISTS gurman_audit.log_row_delete()")
 
 
 def seed_reference_tables():
@@ -730,7 +772,7 @@ def on_startup():
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(80) NOT NULL DEFAULT ''")
     seed_reference_tables()
     init_support_tables()
-    init_delete_audit()
+    init_database_audit()
     init_telegram_bot()
     threading.Thread(target=tg_poller, daemon=True).start()
 
@@ -1462,22 +1504,18 @@ def make_invite(u=Depends(require_admin)):
 
 @app.get("/api/admin/logs")
 def get_logs(start_time: Optional[str] = None, end_time: Optional[str] = None, u=Depends(require_admin)):
-    rows = db.execute(
-        "SELECT created_at, level, message FROM audit_logs ORDER BY id ASC",
-        (),
-        "all",
-    )
+    s_raw = (start_time or "").strip()
+    e_raw = (end_time or "").strip()
+    has_filters = bool(s_raw or e_raw)
+    query = "SELECT created_at, level, message FROM audit_logs ORDER BY id DESC"
+    rows = db.execute(query if has_filters else query + " LIMIT 1000", fetch="all")
     lines = []
-    for r in rows:
-        dt_str = (
-            r["created_at"].strftime("%Y-%m-%d %H:%M:%S")
-            if hasattr(r["created_at"], "strftime")
-            else str(r["created_at"])[:19]
-        )
-        lines.append(f"{dt_str} | {r['level']} | {r['message']}")
-
-    s_raw = start_time.strip() if start_time else ""
-    e_raw = end_time.strip() if end_time else ""
+    for row in reversed(rows):
+        timestamp = row["created_at"]
+        formatted = timestamp.strftime("%Y-%m-%d %H:%M:%S") if hasattr(timestamp, "strftime") else str(timestamp)[:19]
+        lines.append(f"{formatted} | {row['level']} | {row['message']}")
+    if not has_filters:
+        return {"logs": lines}
     filtered = []
     for line in lines:
         log_dt = line[:19]
